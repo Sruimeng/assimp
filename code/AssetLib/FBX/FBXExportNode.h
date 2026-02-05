@@ -193,6 +193,13 @@ public:
         bool binary, int indent
     );
 
+    static void WritePropertyNode(
+        const std::string& name,
+        const std::vector<float>& v,
+        Assimp::StreamWriterLE& s,
+        bool binary, int indent
+    );
+
     // convenience function to create and write a property node,
     // holding a single property which is an array of values.
     // does not copy the data, so is efficient for large arrays.
@@ -231,6 +238,12 @@ private: // internal functions used for writing
     );
     static void WritePropertyNodeAscii(
         const std::string& name,
+        const std::vector<float>& v,
+        Assimp::StreamWriterLE& s,
+        int indent
+    );
+    static void WritePropertyNodeAscii(
+        const std::string& name,
         const std::vector<int32_t>& v,
         Assimp::StreamWriterLE& s,
         int indent
@@ -238,6 +251,11 @@ private: // internal functions used for writing
     static void WritePropertyNodeBinary(
         const std::string& name,
         const std::vector<double>& v,
+        Assimp::StreamWriterLE& s
+    );
+    static void WritePropertyNodeBinary(
+        const std::string& name,
+        const std::vector<float>& v,
         Assimp::StreamWriterLE& s
     );
     static void WritePropertyNodeBinary(

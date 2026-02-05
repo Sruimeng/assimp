@@ -70,6 +70,7 @@ public:
     ~D3MFExporter();
     bool validate() const;
     bool exportArchive( const char *file );
+    const std::vector<uint8_t>& GetArchiveBuffer() const;
     bool exportContentTypes();
     bool exportRelations();
     bool export3DModel();
@@ -99,6 +100,7 @@ private:
     std::ostringstream mContentOutput;
     std::vector<unsigned int> mBuildItems;
     std::vector<OpcPackageRelationship*> mRelations;
+    std::vector<uint8_t> mArchiveBuffer;
 };
 
 
@@ -107,5 +109,4 @@ private:
 
 #endif // ASSIMP_BUILD_NO_3MF_EXPORTER
 #endif // ASSIMP_BUILD_NO_EXPORT
-
 

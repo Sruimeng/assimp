@@ -65,6 +65,9 @@ OPTION(ASSIMP_BUILD_USD_VERBOSE_LOGS "Enable verbose USD import debug logging" o
 # (Need to make this opt-in because 3rd party code triggers lots of CI code quality warnings)
 OPTION(ASSIMP_BUILD_VRML_IMPORTER "Enable VRML (.wrl/.x3dv) file import" off)
 
+# Optional meshoptimizer decoder for EXT_meshopt_compression
+OPTION(ASSIMP_BUILD_MESHOPT "Enable EXT_meshopt_compression decoding" off)
+
 #--------------------------------------------------------------------------------#
 #                  Internal impl for optional model formats
 #--------------------------------------------------------------------------------#

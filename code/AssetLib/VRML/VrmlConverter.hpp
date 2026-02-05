@@ -53,5 +53,6 @@ namespace Assimp {
 bool isFileWrlVrml97Ext(const std::string &pFile);
 bool isFileX3dvClassicVrmlExt(const std::string &pFile);
 
-std::stringstream ConvertVrmlFileToX3dXmlFile(const std::string &pFile);
+class IOSystem;
+std::stringstream ConvertVrmlFileToX3dXmlFile(const std::string &pFile, IOSystem *pIOHandler);
 } // namespace Assimp

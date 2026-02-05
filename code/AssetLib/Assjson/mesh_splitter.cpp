@@ -57,7 +57,7 @@ void MeshSplitter::UpdateNode(aiNode* pcNode, const std::vector<std::pair<aiMesh
 	}
 
 	// now build the new list
-	delete pcNode->mMeshes;
+	delete[] pcNode->mMeshes;
 	pcNode->mNumMeshes = static_cast<unsigned int>(aiEntries.size());
 	pcNode->mMeshes = new unsigned int[pcNode->mNumMeshes];
 

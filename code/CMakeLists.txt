@@ -1072,6 +1072,7 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
             ${Tinyusdz_SRC_ABSPATH}/tydra/render-data.cc
             ${Tinyusdz_SRC_ABSPATH}/tydra/scene-access.cc
             ${Tinyusdz_SRC_ABSPATH}/tydra/shader-network.cc
+            ${Tinyusdz_SRC_ABSPATH}/tydra/usd-export.cc
             ${Tinyusdz_SRC_ABSPATH}/usda-reader.cc
             ${Tinyusdz_SRC_ABSPATH}/usda-writer.cc
             ${Tinyusdz_SRC_ABSPATH}/usdc-reader.cc
@@ -1229,6 +1230,34 @@ ELSE()
   SOURCE_GROUP( Contrib\\openddl_parser FILES ${openddl_parser_SRCS})
 ENDIF()
 
+# meshoptimizer (for EXT_meshopt_compression)
+IF (ASSIMP_BUILD_MESHOPT)
+  SET( Meshopt_SRCS
+    ../contrib/meshoptimizer/meshoptimizer.h
+    ../contrib/meshoptimizer/allocator.cpp
+    ../contrib/meshoptimizer/clusterizer.cpp
+    ../contrib/meshoptimizer/indexanalyzer.cpp
+    ../contrib/meshoptimizer/indexcodec.cpp
+    ../contrib/meshoptimizer/indexgenerator.cpp
+    ../contrib/meshoptimizer/meshletcodec.cpp
+    ../contrib/meshoptimizer/overdrawoptimizer.cpp
+    ../contrib/meshoptimizer/partition.cpp
+    ../contrib/meshoptimizer/quantization.cpp
+    ../contrib/meshoptimizer/rasterizer.cpp
+    ../contrib/meshoptimizer/simplifier.cpp
+    ../contrib/meshoptimizer/spatialorder.cpp
+    ../contrib/meshoptimizer/stripifier.cpp
+    ../contrib/meshoptimizer/vcacheoptimizer.cpp
+    ../contrib/meshoptimizer/vertexcodec.cpp
+    ../contrib/meshoptimizer/vertexfilter.cpp
+    ../contrib/meshoptimizer/vfetchoptimizer.cpp
+  )
+  INCLUDE_DIRECTORIES("../contrib/meshoptimizer")
+  SOURCE_GROUP( Contrib\\Meshoptimizer FILES ${Meshopt_SRCS})
+ELSE()
+  SET( Meshopt_SRCS "" )
+ENDIF()
+
 # Open3DGC
 IF(ASSIMP_HUNTER_ENABLED)
   # Nothing to do, not available in Hunter yet.
@@ -1364,6 +1393,7 @@ SET( assimp_src
   ${Meshlab_SRCS}
   ${Tinyusdz_SRCS}
   ${Tinyusdz_DEP_SOURCES}
+  ${Meshopt_SRCS}
   ${Pugixml_SRCS}
   ${stb_SRCS}
   # Necessary to show the headers in the project when using the VC++ generator:
@@ -1388,6 +1418,10 @@ ENDIF ()
 IF (ASSIMP_BUILD_DRACO)
   INCLUDE_DIRECTORIES(${draco_INCLUDE_DIRS})
   ADD_DEFINITIONS( -DASSIMP_ENABLE_DRACO )
+ENDIF()
+
+IF (ASSIMP_BUILD_MESHOPT)
+  ADD_DEFINITIONS( -DASSIMP_ENABLE_MESHOPT )
 ENDIF()
 
 ADD_LIBRARY( assimp ${assimp_src} )

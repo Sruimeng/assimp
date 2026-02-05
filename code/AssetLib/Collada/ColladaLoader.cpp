@@ -641,6 +641,12 @@ aiMesh *ColladaLoader::CreateMesh(const ColladaParser &pParser, const Mesh *pSrc
             }
 
             dstMesh->mNumUVComponents[a] = pSrcMesh->mNumUVComponents[a];
+            if (dstMesh->mNumUVComponents[a] == 0) {
+                dstMesh->mNumUVComponents[a] = 2;
+            }
+            if (dstMesh->mNumUVComponents[a] > 3) {
+                dstMesh->mNumUVComponents[a] = 3;
+            }
         }
     }
 

@@ -50,6 +50,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rapidjson/stringbuffer.h>
 
 // clang-format off
+#ifdef ASSIMP_ENABLE_MESHOPT
+#include "meshoptimizer.h"
+#endif
+
 #ifdef ASSIMP_ENABLE_DRACO
 
 // Google draco library headers spew many warnings. Bad Google, no cookie
@@ -577,6 +581,13 @@ inline void Buffer::Read(Value &obj, Asset &r) {
     Value *it = FindString(obj, "uri");
     if (!it) {
         if (statedLength > 0) {
+            bool isMeshoptFallback = false;
+            if (Value *meshoptExt = FindExtension(obj, "EXT_meshopt_compression")) {
+                ReadMember(*meshoptExt, "fallback", isMeshoptFallback);
+            }
+            if (isMeshoptFallback && r.extensionsRequired.EXT_meshopt_compression) {
+                return;
+            }
             throw DeadlyImportError("GLTF: buffer with non-zero length missing the \"uri\" attribute");
         }
         return;
@@ -779,12 +790,114 @@ inline void BufferView::Read(Value &obj, Asset &r) {
     if ((byteOffset + byteLength) > buffer->byteLength) {
         throw DeadlyImportError("GLTF: Buffer view with offset/length (", byteOffset, "/", byteLength, ") is out of range.");
     }
+
+    if (Value *meshoptExt = FindExtension(obj, "EXT_meshopt_compression")) {
+#ifdef ASSIMP_ENABLE_MESHOPT
+        Value *compressedBufferVal = FindUInt(*meshoptExt, "buffer");
+        if (!compressedBufferVal) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression missing buffer index.");
+        }
+        Ref<Buffer> compressedBuffer = r.buffers.Retrieve(compressedBufferVal->GetUint());
+        if (!compressedBuffer) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression references invalid buffer.");
+        }
+
+        size_t compressedOffset = MemberOrDefault(*meshoptExt, "byteOffset", size_t(0));
+        size_t compressedLength = MemberOrDefault(*meshoptExt, "byteLength", size_t(0));
+        size_t decodedStride = MemberOrDefault(*meshoptExt, "byteStride", size_t(0));
+        size_t decodedCount = MemberOrDefault(*meshoptExt, "count", size_t(0));
+
+        const char *mode = nullptr;
+        if (!ReadMember(*meshoptExt, "mode", mode) || mode == nullptr) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression missing mode.");
+        }
+
+        const char *filter = nullptr;
+        ReadMember(*meshoptExt, "filter", filter);
+
+        if (decodedStride == 0 || decodedCount == 0 || compressedLength == 0) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression has invalid decode parameters.");
+        }
+
+        if ((compressedOffset + compressedLength) > compressedBuffer->byteLength) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression buffer range is out of bounds.");
+        }
+
+        const size_t decodedLength = decodedStride * decodedCount;
+        const size_t originalByteLength = byteLength;
+        const size_t originalByteOffset = byteOffset;
+        const unsigned int originalByteStride = byteStride;
+        if (byteLength == 0) {
+            byteLength = decodedLength;
+        }
+        if (byteLength != decodedLength) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression decoded size mismatch.");
+        }
+
+        const unsigned char *src = compressedBuffer->GetPointer() + compressedOffset;
+        if (src == nullptr) {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression buffer data is null.");
+        }
+
+        std::unique_ptr<Buffer> decoded (new Buffer());
+        decoded->Grow(decodedLength);
+
+        int decodeResult = -1;
+        if (strcmp(mode, "ATTRIBUTES") == 0) {
+            decodeResult = meshopt_decodeVertexBuffer(decoded->GetPointer(), decodedCount, decodedStride, src, compressedLength);
+        } else if (strcmp(mode, "TRIANGLES") == 0) {
+            decodeResult = meshopt_decodeIndexBuffer(decoded->GetPointer(), decodedCount, decodedStride, src, compressedLength);
+        } else if (strcmp(mode, "INDICES") == 0) {
+            decodeResult = meshopt_decodeIndexSequence(decoded->GetPointer(), decodedCount, decodedStride, src, compressedLength);
+        } else {
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression unsupported mode \"", mode, "\".");
+        }
+
+        if (decodeResult != 0) {
+            if (compressedBuffer != buffer) {
+                byteLength = originalByteLength;
+                byteOffset = originalByteOffset;
+                byteStride = originalByteStride;
+                return;
+            }
+            throw DeadlyImportError("GLTF: EXT_meshopt_compression decode failed.");
+        }
+
+        if (filter != nullptr && filter[0] != '\0' && strcmp(filter, "NONE") != 0) {
+            if (strcmp(filter, "OCTAHEDRAL") == 0) {
+                meshopt_decodeFilterOct(decoded->GetPointer(), decodedCount, decodedStride);
+            } else if (strcmp(filter, "QUATERNION") == 0) {
+                meshopt_decodeFilterQuat(decoded->GetPointer(), decodedCount, decodedStride);
+            } else if (strcmp(filter, "EXPONENTIAL") == 0) {
+                meshopt_decodeFilterExp(decoded->GetPointer(), decodedCount, decodedStride);
+            } else if (strcmp(filter, "COLOR") == 0) {
+                meshopt_decodeFilterColor(decoded->GetPointer(), decodedCount, decodedStride);
+            } else {
+                throw DeadlyImportError("GLTF: EXT_meshopt_compression unsupported filter \"", filter, "\".");
+            }
+        }
+
+        decodedBuffer.reset(decoded.release());
+        byteStride = static_cast<unsigned int>(decodedStride);
+        byteOffset = 0;
+#else
+        throw DeadlyImportError("GLTF: EXT_meshopt_compression is not supported by this build.");
+#endif
+    }
 }
 
 inline uint8_t *BufferView::GetPointerAndTailSize(size_t accOffset, size_t& outTailSize) {
     if (!buffer) {
         outTailSize = 0;
         return nullptr;
+    }
+    if (decodedBuffer) {
+        if (accOffset >= decodedBuffer->byteLength) {
+            outTailSize = 0;
+            return nullptr;
+        }
+        outTailSize = decodedBuffer->byteLength - accOffset;
+        return decodedBuffer->GetPointer() + accOffset;
     }
     uint8_t * const basePtr = buffer->GetPointer();
     if (!basePtr) {
@@ -895,7 +1008,8 @@ inline void Accessor::Read(Value &obj, Asset &r) {
             throw DeadlyImportError("GLTF: Accessor with offset/count (", byteOffset, "/", count, ") is out of range.");
         }
 
-        if ((byteOffset + byteLength) > bufferView->byteLength || (bufferView->byteOffset + byteOffset + byteLength) > bufferView->buffer->byteLength) {
+        const size_t bufferByteLength = bufferView->decodedBuffer ? bufferView->decodedBuffer->byteLength : bufferView->buffer->byteLength;
+        if ((byteOffset + byteLength) > bufferView->byteLength || (bufferView->byteOffset + byteOffset + byteLength) > bufferByteLength) {
             throw DeadlyImportError("GLTF: Accessor with offset/length (", byteOffset, "/", byteLength, ") is out of range.");
         }
     }
@@ -974,6 +1088,12 @@ inline uint8_t *Accessor::GetPointer() {
         return sparse->data.data();
 
     if (!bufferView || !bufferView->buffer) return nullptr;
+    if (bufferView->decodedBuffer) {
+        if (byteOffset >= bufferView->decodedBuffer->byteLength) {
+            return nullptr;
+        }
+        return bufferView->decodedBuffer->GetPointer() + byteOffset;
+    }
     uint8_t *basePtr = bufferView->buffer->GetPointer();
     if (!basePtr) return nullptr;
 
@@ -1003,6 +1123,9 @@ inline size_t Accessor::GetStride() {
 inline size_t Accessor::GetMaxByteSize() {
     if (decodedBuffer)
         return decodedBuffer->byteLength;
+
+    if (bufferView && bufferView->decodedBuffer)
+        return bufferView->decodedBuffer->byteLength;
 
     return (bufferView ? bufferView->byteLength : sparse->data.size());
 }
@@ -2157,6 +2280,7 @@ inline void Asset::ReadExtensionsRequired(Document &doc) {
     CHECK_REQUIRED_EXT(KHR_draco_mesh_compression);
     CHECK_REQUIRED_EXT(KHR_texture_basisu);
     CHECK_REQUIRED_EXT(EXT_texture_webp);
+    CHECK_REQUIRED_EXT(EXT_meshopt_compression);
 
 #undef CHECK_REQUIRED_EXT
 }
@@ -2188,6 +2312,7 @@ inline void Asset::ReadExtensionsUsed(Document &doc) {
     CHECK_EXT(KHR_draco_mesh_compression);
     CHECK_EXT(KHR_texture_basisu);
     CHECK_EXT(EXT_texture_webp);
+    CHECK_EXT(EXT_meshopt_compression);
 
 #undef CHECK_EXT
 }

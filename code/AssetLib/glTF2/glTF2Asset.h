@@ -534,6 +534,7 @@ struct BufferView : public Object {
     size_t byteOffset; //! The offset into the buffer in bytes. (required)
     size_t byteLength; //! The length of the bufferView in bytes. (default: 0)
     unsigned int byteStride; //!< The stride, in bytes, between attributes referenced by this accessor. (default: 0)
+    std::unique_ptr<Buffer> decodedBuffer; // Decoded data for compressed bufferView
 
     BufferViewTarget target; //! The target that the WebGL buffer should be bound to.
 
@@ -1138,6 +1139,7 @@ public:
         bool FB_ngon_encoding{false};
         bool KHR_texture_basisu{false};
         bool EXT_texture_webp{false};
+        bool EXT_meshopt_compression{false};
 
         Extensions() = default;
         ~Extensions() = default;
@@ -1148,6 +1150,7 @@ public:
         bool KHR_draco_mesh_compression{false};
         bool KHR_texture_basisu{false};
         bool EXT_texture_webp{false};
+        bool EXT_meshopt_compression{false};
 
         RequiredExtensions() = default;
     } extensionsRequired;

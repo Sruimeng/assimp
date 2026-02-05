@@ -45,7 +45,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifndef ASSIMP_BUILD_NO_X3D_IMPORTER
 
+#include <limits>
 #include <memory> // std::unique_ptr
+#include <vector>
+
+#include <assimp/IOStream.hpp>
+#include <assimp/IOSystem.hpp>
+
 #include "VrmlConverter.hpp"
 
 namespace Assimp {
@@ -74,21 +80,30 @@ bool isFileX3dvClassicVrmlExt(const std::string &pFile) {
     return (ext[0] == 'x' || ext[0] == 'X') && (ext[1] == '3') && (ext[2] == 'd' || ext[2] == 'D') && (ext[3] == 'v' || ext[3] == 'V');
 }
 
-#if !defined(ASSIMP_BUILD_NO_VRML_IMPORTER)
-static VrmlTranslator::Scanner createScanner(const std::string &pFile) {
-    std::unique_ptr<wchar_t[]> wide_stringPtr{ new wchar_t[ pFile.length() + 1 ] };
-    std::copy(pFile.begin(), pFile.end(), wide_stringPtr.get());
-    wide_stringPtr[ pFile.length() ] = 0;
-
-    return VrmlTranslator::Scanner(wide_stringPtr.get());
-} // wide_stringPtr auto-deleted when leaving scope
-#endif // #if !defined(ASSIMP_BUILD_NO_VRML_IMPORTER)
-
-std::stringstream ConvertVrmlFileToX3dXmlFile(const std::string &pFile) {
+std::stringstream ConvertVrmlFileToX3dXmlFile(const std::string &pFile, IOSystem *pIOHandler) {
     std::stringstream ss;
     if (isFileWrlVrml97Ext(pFile) || isFileX3dvClassicVrmlExt(pFile)) {
 #if !defined(ASSIMP_BUILD_NO_VRML_IMPORTER)
-        VrmlTranslator::Scanner scanner = createScanner(pFile);
+        if (pIOHandler == nullptr) {
+            return ss;
+        }
+        auto stream_closer = [pIOHandler](IOStream *pStream) {
+            pIOHandler->Close(pStream);
+        };
+        std::unique_ptr<IOStream, decltype(stream_closer)> file_stream(pIOHandler->Open(pFile, "rb"), stream_closer);
+        if (!file_stream) {
+            return ss;
+        }
+        size_t file_size{ file_stream->FileSize() };
+        if (file_size > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            return ss;
+        }
+        std::vector<unsigned char> buffer(file_size);
+        if (file_size > 0) {
+            file_stream->Read(buffer.data(), 1, file_size);
+        }
+
+        VrmlTranslator::Scanner scanner(buffer.data(), static_cast<int>(buffer.size()));
         VrmlTranslator::Parser parser(&scanner);
         parser.Parse();
         ss.str("");

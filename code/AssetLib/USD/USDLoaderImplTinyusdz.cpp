@@ -95,9 +95,8 @@ void USDImporterImplTinyusdz::InternReadFile(const std::string &pFile, aiScene *
     ss << "InternReadFile(): model" << nameWExt;
     TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
 
-    bool is_load_from_mem{ pFile.substr(0, AI_MEMORYIO_MAGIC_FILENAME_LENGTH) == AI_MEMORYIO_MAGIC_FILENAME };
     std::vector<uint8_t> in_mem_data;
-    if (is_load_from_mem) {
+    {
         auto stream_closer = [pIOHandler](IOStream *pStream) {
             pIOHandler->Close(pStream);
         };
@@ -107,7 +106,9 @@ void USDImporterImplTinyusdz::InternReadFile(const std::string &pFile, aiScene *
         }
         size_t file_size{ file_stream->FileSize() };
         in_mem_data.resize(file_size);
-        file_stream->Read(in_mem_data.data(), 1, file_size);
+        if (file_size > 0) {
+            file_stream->Read(in_mem_data.data(), 1, file_size);
+        }
     }
 
     bool ret{ false };
@@ -116,27 +117,23 @@ void USDImporterImplTinyusdz::InternReadFile(const std::string &pFile, aiScene *
     std::string warn, err;
     bool is_usdz{ false };
     if (isUsdc(pFile)) {
-        ret = is_load_from_mem ? LoadUSDCFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options) :
-                                 LoadUSDCFromFile(pFile, &stage, &warn, &err, options);
+        ret = LoadUSDCFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options);
         ss.str("");
         ss << "InternReadFile(): LoadUSDCFromFile() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
     } else if (isUsda(pFile)) {
-        ret = is_load_from_mem ? LoadUSDAFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options) :
-                                 LoadUSDAFromFile(pFile, &stage, &warn, &err, options);
+        ret = LoadUSDAFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options);
         ss.str("");
         ss << "InternReadFile(): LoadUSDAFromFile() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
     } else if (isUsdz(pFile)) {
-        ret = is_load_from_mem ? LoadUSDZFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options) :
-                                 LoadUSDZFromFile(pFile, &stage, &warn, &err, options);
+        ret = LoadUSDZFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options);
         is_usdz = true;
         ss.str("");
         ss << "InternReadFile(): LoadUSDZFromFile() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
     } else if (isUsd(pFile)) {
-        ret = is_load_from_mem ? LoadUSDFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options) :
-                                 LoadUSDFromFile(pFile, &stage, &warn, &err, options);
+        ret = LoadUSDFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options);
         ss.str("");
         ss << "InternReadFile(): LoadUSDFromFile() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
@@ -173,8 +170,7 @@ void USDImporterImplTinyusdz::InternReadFile(const std::string &pFile, aiScene *
     // NOTE: Pointer address of usdz_asset must be valid until the call of RenderSceneConverter::ConvertToRenderScene.
     tinyusdz::USDZAsset usdz_asset;
     if (is_usdz) {
-        bool is_read_USDZ_asset = is_load_from_mem ? tinyusdz::ReadUSDZAssetInfoFromMemory(in_mem_data.data(), in_mem_data.size(), false, &usdz_asset, &warn, &err) :
-                                                     tinyusdz::ReadUSDZAssetInfoFromFile(pFile, &usdz_asset, &warn, &err);
+        bool is_read_USDZ_asset = tinyusdz::ReadUSDZAssetInfoFromMemory(in_mem_data.data(), in_mem_data.size(), false, &usdz_asset, &warn, &err);
         if (!is_read_USDZ_asset) {
             if (!warn.empty()) {
                 ss.str("");
