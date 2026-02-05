@@ -100,16 +100,21 @@ void USDImporterImplTinyusdz::InternReadFile(
     ss << "InternReadFile(): model" << nameWExt;
     TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
 
-    // Read file into memory
-    std::unique_ptr<IOStream> pStream(pIOHandler->Open(pFile, "rb"));
-    if (!pStream) {
-        throw DeadlyImportError("Failed to open file ", pFile, ".");
+    std::vector<uint8_t> in_mem_data;
+    {
+        auto stream_closer = [pIOHandler](IOStream *pStream) {
+            pIOHandler->Close(pStream);
+        };
+        std::unique_ptr<IOStream, decltype(stream_closer)> file_stream(pIOHandler->Open(pFile, "rb"), stream_closer);
+        if (!file_stream) {
+            throw DeadlyImportError("Failed to open file ", pFile, ".");
+        }
+        size_t file_size{ file_stream->FileSize() };
+        in_mem_data.resize(file_size);
+        if (file_size > 0) {
+            file_stream->Read(in_mem_data.data(), 1, file_size);
+        }
     }
-    
-    size_t fileSize = pStream->FileSize();
-    std::vector<uint8_t> in_mem_data(fileSize);
-    if (fileSize != pStream->Read(in_mem_data.data(), 1, fileSize)) {
-        throw DeadlyImportError("Failed to read the file ", pFile, ".");
     }
 
     bool ret{ false };
@@ -125,7 +130,7 @@ void USDImporterImplTinyusdz::InternReadFile(
         ss << "InternReadFile(): LoadUSDCFromMemory() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
     } else if (isUsda(pFile)) {
-        ret = LoadUSDAFromMemory(in_mem_data.data(), in_mem_data.size(), basePath, &stage, &warn, &err, options);
+        ret = LoadUSDAFromMemory(in_mem_data.data(), in_mem_data.size(), pFile, &stage, &warn, &err, options);
         ss.str("");
         ss << "InternReadFile(): LoadUSDAFromMemory() result: " << ret;
         TINYUSDZLOGD(TAG, "%s", ss.str().c_str());
@@ -174,7 +179,6 @@ void USDImporterImplTinyusdz::InternReadFile(
     // NOTE: Pointer address of usdz_asset must be valid until the call of RenderSceneConverter::ConvertToRenderScene.
     tinyusdz::USDZAsset usdz_asset;
     if (is_usdz) {
-        // Always use memory-based loading for consistency
         bool is_read_USDZ_asset = tinyusdz::ReadUSDZAssetInfoFromMemory(in_mem_data.data(), in_mem_data.size(), false, &usdz_asset, &warn, &err);
         if (!is_read_USDZ_asset) {
             if (!warn.empty()) {

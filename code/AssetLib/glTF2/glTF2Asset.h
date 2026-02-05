@@ -544,6 +544,7 @@ struct BufferView : public Object {
     size_t byteOffset; //! The offset into the buffer in bytes. (required)
     size_t byteLength; //! The length of the bufferView in bytes. (default: 0)
     unsigned int byteStride; //!< The stride, in bytes, between attributes referenced by this accessor. (default: 0)
+    std::unique_ptr<Buffer> decodedBuffer; // Decoded data for compressed bufferView
 
     BufferViewTarget target; //! The target that the WebGL buffer should be bound to.
 
@@ -1150,6 +1151,8 @@ public:
         bool KHR_draco_mesh_compression;
         bool FB_ngon_encoding;
         bool KHR_texture_basisu;
+        bool EXT_texture_webp;
+        bool EXT_meshopt_compression;
 
         Extensions() :
                 KHR_materials_pbrSpecularGlossiness(false),
@@ -1166,7 +1169,9 @@ public:
                 KHR_materials_anisotropy(false),
                 KHR_draco_mesh_compression(false),
                 FB_ngon_encoding(false),
-                KHR_texture_basisu(false) {
+                KHR_texture_basisu(false),
+                EXT_texture_webp(false),
+                EXT_meshopt_compression(false) {
             // empty
         }
     } extensionsUsed;
@@ -1175,8 +1180,14 @@ public:
     struct RequiredExtensions {
         bool KHR_draco_mesh_compression;
         bool KHR_texture_basisu;
+        bool EXT_texture_webp;
+        bool EXT_meshopt_compression;
 
-        RequiredExtensions() : KHR_draco_mesh_compression(false), KHR_texture_basisu(false) {
+        RequiredExtensions()
+        : KHR_draco_mesh_compression(false)
+        , KHR_texture_basisu(false)
+        , EXT_texture_webp(false)
+        , EXT_meshopt_compression(false) {
             // empty
         }
     } extensionsRequired;

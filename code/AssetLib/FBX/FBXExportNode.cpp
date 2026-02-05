@@ -442,6 +442,41 @@ void FBX::Node::WritePropertyNodeAscii(
     node.End(s, false, indent, false);
 }
 
+// ascii property node from vector of floats
+void FBX::Node::WritePropertyNodeAscii(
+        const std::string& name,
+        const std::vector<float>& v,
+        Assimp::StreamWriterLE& s,
+        int indent){
+    char buffer[32];
+    FBX::Node node(name);
+    node.Begin(s, false, indent);
+    std::string vsize = ai_to_string(v.size());
+    // *<size> {
+    s.PutChar('*'); s.PutString(vsize); s.PutString(" {\n");
+    // indent + 1
+    for (int i = 0; i < indent + 1; ++i) { s.PutChar('\t'); }
+    // a: value,value,value,...
+    s.PutString("a: ");
+    int count = 0;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i > 0) { s.PutChar(','); }
+        int len = ai_snprintf(buffer, sizeof(buffer), "%f", static_cast<double>(v[i]));
+        count += len;
+        if (count > 2048) { s.PutChar('\n'); count = 0; }
+        if (len < 0 || len > 31) {
+            // this should never happen
+            throw DeadlyExportError("failed to convert float to string");
+        }
+        for (int j = 0; j < len; ++j) { s.PutChar(buffer[j]); }
+    }
+    // }
+    s.PutChar('\n');
+    for (int i = 0; i < indent; ++i) { s.PutChar('\t'); }
+    s.PutChar('}'); s.PutChar(' ');
+    node.End(s, false, indent, false);
+}
+
 // ascii property node from vector of int32_t
 void FBX::Node::WritePropertyNodeAscii(
     const std::string& name,
@@ -496,6 +531,24 @@ void FBX::Node::WritePropertyNodeBinary(
     node.EndBinary(s, false);
 }
 
+// binary property node from vector of floats
+// TODO: optional zip compression!
+void FBX::Node::WritePropertyNodeBinary(
+    const std::string& name,
+    const std::vector<float>& v,
+    Assimp::StreamWriterLE& s
+){
+    FBX::Node node(name);
+    node.BeginBinary(s);
+    s.PutU1('f');
+    s.PutU4(uint32_t(v.size())); // number of elements
+    s.PutU4(0); // no encoding (1 would be zip-compressed)
+    s.PutU4(uint32_t(v.size()) * 4); // data size
+    for (auto it = v.begin(); it != v.end(); ++it) { s.PutF4(*it); }
+    node.EndPropertiesBinary(s, 1);
+    node.EndBinary(s, false);
+}
+
 // binary property node from vector of int32_t
 // TODO: optional zip compression!
 void FBX::Node::WritePropertyNodeBinary(
@@ -522,6 +575,22 @@ void FBX::Node::WritePropertyNodeBinary(
 void FBX::Node::WritePropertyNode(
     const std::string& name,
     const std::vector<double>& v,
+    Assimp::StreamWriterLE& s,
+    bool binary, int indent
+){
+    if (binary) {
+        FBX::Node::WritePropertyNodeBinary(name, v, s);
+    } else {
+        FBX::Node::WritePropertyNodeAscii(name, v, s, indent);
+    }
+}
+
+// convenience function to create and write a property node,
+// holding a single property which is an array of values.
+// does not copy the data, so is efficient for large arrays.
+void FBX::Node::WritePropertyNode(
+    const std::string& name,
+    const std::vector<float>& v,
     Assimp::StreamWriterLE& s,
     bool binary, int indent
 ){

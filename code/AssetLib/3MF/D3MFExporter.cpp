@@ -2,7 +2,7 @@
 Open Asset Import Library (assimp)
 ----------------------------------------------------------------------
 
-Copyright (c) 2006-2025, assimp team
+Copyright (c) 2006-2026, assimp team
 
 All rights reserved.
 
@@ -48,8 +48,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assimp/scene.h>
 #include <assimp/DefaultLogger.hpp>
 #include <assimp/Exporter.hpp>
-#include <assimp/IOStream.hpp>
 #include <assimp/IOSystem.hpp>
+
+#include <cstdlib>
 
 #include "3MFXmlTags.h"
 #include "D3MFOpcPackage.h"
@@ -77,6 +78,17 @@ void ExportScene3MF(const char *pFile, IOSystem *pIOSystem, const aiScene *pScen
         if (!ok) {
             throw DeadlyExportError("Could not export 3MP archive: " + std::string(pFile));
         }
+#if defined(__EMSCRIPTEN__)
+        const auto &buffer = myExporter.GetArchiveBuffer();
+        if (buffer.empty()) {
+            throw DeadlyExportError("Could not export 3MP archive: " + std::string(pFile));
+        }
+        std::unique_ptr<IOStream> outfile (pIOSystem->Open(pFile, "wb"));
+        if (outfile == nullptr) {
+            throw DeadlyExportError("could not open output .3mf file: " + std::string(pFile));
+        }
+        outfile->Write(buffer.data(), 1, buffer.size());
+#endif
     }
 }
 
@@ -94,7 +106,11 @@ D3MFExporter::~D3MFExporter() {
     mRelations.clear();
 }
 
-bool D3MFExporter::validate() {
+const std::vector<uint8_t>& D3MFExporter::GetArchiveBuffer() const {
+    return mArchiveBuffer;
+}
+
+bool D3MFExporter::validate() const {
     if (mArchiveName.empty()) {
         return false;
     }
@@ -108,17 +124,36 @@ bool D3MFExporter::validate() {
 
 bool D3MFExporter::exportArchive(const char *file) {
     bool ok(true);
+    mArchiveBuffer.clear();
 
+#if defined(__EMSCRIPTEN__)
+    m_zipArchive = zip_stream_open(nullptr, 0, ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
+#else
     m_zipArchive = zip_open(file, ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
+#endif
     if (nullptr == m_zipArchive) {
         return false;
     }
 
-    ok |= exportContentTypes();
-    ok |= export3DModel();
-    ok |= exportRelations();
+    ok &= exportContentTypes();
+    ok &= export3DModel();
+    ok &= exportRelations();
 
+#if defined(__EMSCRIPTEN__)
+    if (ok) {
+        void *buf = nullptr;
+        size_t bufsize = 0;
+        if (zip_stream_copy(m_zipArchive, &buf, &bufsize) < 0 || buf == nullptr || bufsize == 0) {
+            ok = false;
+        } else {
+            mArchiveBuffer.assign(static_cast<uint8_t*>(buf), static_cast<uint8_t*>(buf) + bufsize);
+        }
+        std::free(buf);
+    }
+    zip_stream_close(m_zipArchive);
+#else
     zip_close(m_zipArchive);
+#endif
     m_zipArchive = nullptr;
 
     return ok;

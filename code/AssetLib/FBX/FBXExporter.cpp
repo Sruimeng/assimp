@@ -1126,16 +1126,16 @@ void FBXExporter::WriteObjects () {
         n.BeginChildren(outstream, binary, indent);
 
         // output vertex data - each vertex should be unique (probably)
-        std::vector<double> flattened_vertices;
+        std::vector<float> flattened_vertices;
         // index of original vertex in vertex data vector
         std::vector<int32_t> vertex_indices;
 
-        std::vector<double> normal_data;
-        std::vector<double> color_data;
+        std::vector<float> normal_data;
+        std::vector<float> color_data;
 
         std::vector<int32_t> polygon_data;
 
-        std::vector<std::vector<double>> uv_data;
+        std::vector<std::vector<float>> uv_data;
         std::vector<std::vector<int32_t>> uv_indices;
 
         indent = 2;

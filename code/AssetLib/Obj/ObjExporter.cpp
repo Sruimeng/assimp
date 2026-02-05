@@ -126,9 +126,11 @@ ObjExporter::ObjExporter(const char* _filename, const aiScene* pScene, bool noMt
     // make sure that all formatting happens using the standard, C locale and not the user's current locale
     const std::locale& l = std::locale("C");
     mOutput.imbue(l);
-    mOutput.precision(ASSIMP_AI_REAL_TEXT_PRECISION);
+    mOutput.setf(std::ios::fixed);
+    mOutput.precision(8);
     mOutputMat.imbue(l);
-    mOutputMat.precision(ASSIMP_AI_REAL_TEXT_PRECISION);
+    mOutputMat.setf(std::ios::fixed);
+    mOutputMat.precision(8);
 
     WriteGeometryFile(
         noMtl,

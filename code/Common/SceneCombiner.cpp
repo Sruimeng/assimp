@@ -1140,7 +1140,7 @@ void SceneCombiner::Copy(aiAnimMesh **_dest, const aiAnimMesh *src) {
         }
     }
 
-    // Copy all vertex color channels (not just consecutive ones)  
+    // Copy all vertex color channels (not just consecutive ones)
     for (unsigned int n = 0; n < AI_MAX_NUMBER_OF_COLOR_SETS; ++n) {
         if (dest->HasVertexColors(n)) {
             GetArrayCopy(dest->mColors[n], dest->mNumVertices);
