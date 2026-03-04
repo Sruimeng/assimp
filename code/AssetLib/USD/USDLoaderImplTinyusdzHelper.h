@@ -53,7 +53,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace Assimp {
 
 std::string tinyusdzAnimChannelTypeFor(
-        tinyusdz::tydra::AnimationChannel::ChannelType animChannel);
+        tinyusdz::tydra::AnimationPath animChannel);
 std::string tinyusdzNodeTypeFor(tinyusdz::tydra::NodeType type);
 
 template <typename T>

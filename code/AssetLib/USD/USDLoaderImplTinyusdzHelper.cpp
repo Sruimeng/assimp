@@ -48,23 +48,20 @@ namespace {
 //const char *const TAG = "tinyusdz helper";
 }
 
-using ChannelType = tinyusdz::tydra::AnimationChannel::ChannelType;
-std::string Assimp::tinyusdzAnimChannelTypeFor(ChannelType animChannel) {
+using AnimationPath = tinyusdz::tydra::AnimationPath;
+std::string Assimp::tinyusdzAnimChannelTypeFor(AnimationPath animChannel) {
     switch (animChannel) {
-    case ChannelType::Transform: {
-        return "Transform";
-    }
-    case ChannelType::Translation: {
+    case AnimationPath::Translation: {
         return "Translation";
     }
-    case ChannelType::Rotation: {
+    case AnimationPath::Rotation: {
         return "Rotation";
     }
-    case ChannelType::Scale: {
+    case AnimationPath::Scale: {
         return "Scale";
     }
-    case ChannelType::Weight: {
-        return "Weight";
+    case AnimationPath::Weights: {
+        return "Weights";
     }
     default:
         return "Invalid";

@@ -714,6 +714,8 @@ if (NOT ASSIMP_NO_EXPORT)
       AssetLib/USD/USDZExporterHelper.cpp
       AssetLib/USD/usdz-writer.hh
       AssetLib/USD/usdz-writer.cc)
+  else()
+    add_definitions(-DASSIMP_BUILD_NO_USD_EXPORTER)
   endif()
 
 endif()
@@ -1000,7 +1002,7 @@ ENDIF() # IF (ASSIMP_BUILD_VRML_IMPORTER)
 
 # USD/USDA/USDC/USDZ support
 # tinyusdz
-IF (ASSIMP_BUILD_USD_IMPORTER)
+IF (ASSIMP_BUILD_USD_IMPORTER OR ASSIMP_BUILD_TINYUSDZ)
     if (ASSIMP_BUILD_USD_VERBOSE_LOGS)
         ADD_DEFINITIONS( -DASSIMP_USD_VERBOSE_LOGS)
     endif ()
@@ -1012,13 +1014,13 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
     # Note: ALWAYS specify a git commit hash (or tag) instead of a branch name; using a branch
     #       name can lead to non-deterministic (unpredictable) results since the code is potentially
     #       in flux
-    # "release" branch, 25 Aug 2025
-    set(TINYUSDZ_GIT_TAG "49eae689036a163e1e9b01dcfbb5d86645ff76d3")
+    # "crate-writer-2025" branch, 05 Feb 2026
+    set(TINYUSDZ_GIT_TAG "b4bc40359444ff66ea8601250cf8454294f99c92")
     message("****")
     message("\n\n**** Cloning tinyusdz repo, git tag ${TINYUSDZ_GIT_TAG}\n\n")
 
-    # Patch required to build arm32 on android
-    set(TINYUSDZ_PATCH_CMD git apply ${Tinyusdz_BASE_ABSPATH}/patches/tinyusdz.patch)
+    # Patch: disable OpenSubdiv dependency for wasm builds (idempotent)
+    set(TINYUSDZ_PATCH_CMD /bin/sh -c "git apply -p1 --reverse --check ${Tinyusdz_BASE_ABSPATH}/patches/tinyusdz.patch || git apply -p1 ${Tinyusdz_BASE_ABSPATH}/patches/tinyusdz.patch")
 
     # Note: CMake's "FetchContent" (which executes at configure time) is much better for this use case
     #       than "ExternalProject" (which executes at build time); we just want to clone a repo and
@@ -1042,6 +1044,7 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
 
     set(Tinyusdz_SRC_ABSPATH "${Tinyusdz_REPO_ABSPATH}/tinyusdz_repo-src/src")
     set(Tinyusdz_SRCS
+            ${Tinyusdz_SRC_ABSPATH}/arg-parser.cc
             ${Tinyusdz_SRC_ABSPATH}/ascii-parser.cc
             ${Tinyusdz_SRC_ABSPATH}/ascii-parser-basetype.cc
             ${Tinyusdz_SRC_ABSPATH}/ascii-parser-timesamples.cc
@@ -1051,21 +1054,41 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
             ${Tinyusdz_SRC_ABSPATH}/crate-format.cc
             ${Tinyusdz_SRC_ABSPATH}/crate-pprint.cc
             ${Tinyusdz_SRC_ABSPATH}/crate-reader.cc
+            ${Tinyusdz_SRC_ABSPATH}/crate-reader-timesamples.cc
+            ${Tinyusdz_SRC_ABSPATH}/crate-writer.cc
+            ${Tinyusdz_SRC_ABSPATH}/color-space.cc
+            ${Tinyusdz_SRC_ABSPATH}/enum-handlers.cc
             ${Tinyusdz_SRC_ABSPATH}/image-loader.cc
             ${Tinyusdz_SRC_ABSPATH}/image-util.cc
             ${Tinyusdz_SRC_ABSPATH}/image-writer.cc
             ${Tinyusdz_SRC_ABSPATH}/io-util.cc
+            ${Tinyusdz_SRC_ABSPATH}/layer.cc
             ${Tinyusdz_SRC_ABSPATH}/linear-algebra.cc
+            ${Tinyusdz_SRC_ABSPATH}/mtlx-dom.cc
+            ${Tinyusdz_SRC_ABSPATH}/mtlx-simple-parser.cc
+            ${Tinyusdz_SRC_ABSPATH}/mtlx-xml-parser.cc
+            ${Tinyusdz_SRC_ABSPATH}/mtlx-xml-tokenizer.cc
             ${Tinyusdz_SRC_ABSPATH}/path-util.cc
+            ${Tinyusdz_SRC_ABSPATH}/performance.cc
+            ${Tinyusdz_SRC_ABSPATH}/prim-pprint-parallel.cc
             ${Tinyusdz_SRC_ABSPATH}/pprinter.cc
             ${Tinyusdz_SRC_ABSPATH}/prim-composition.cc
             ${Tinyusdz_SRC_ABSPATH}/prim-reconstruct.cc
             ${Tinyusdz_SRC_ABSPATH}/prim-types.cc
             ${Tinyusdz_SRC_ABSPATH}/primvar.cc
+            ${Tinyusdz_SRC_ABSPATH}/parser-timing.cc
+            ${Tinyusdz_SRC_ABSPATH}/pxr-compat.cc
+            ${Tinyusdz_SRC_ABSPATH}/sha256.cc
             ${Tinyusdz_SRC_ABSPATH}/stage.cc
+            ${Tinyusdz_SRC_ABSPATH}/stage-converter.cc
             ${Tinyusdz_SRC_ABSPATH}/str-util.cc
+            ${Tinyusdz_SRC_ABSPATH}/task-queue.cc
+            ${Tinyusdz_SRC_ABSPATH}/timesamples-pprint.cc
+            ${Tinyusdz_SRC_ABSPATH}/timesamples.cc
             ${Tinyusdz_SRC_ABSPATH}/tiny-format.cc
+            ${Tinyusdz_SRC_ABSPATH}/tiny-string.cc
             ${Tinyusdz_SRC_ABSPATH}/tinyusdz.cc
+            ${Tinyusdz_SRC_ABSPATH}/typed-array.cc
             ${Tinyusdz_SRC_ABSPATH}/tydra/attribute-eval.cc
             ${Tinyusdz_SRC_ABSPATH}/tydra/attribute-eval-typed.cc
             ${Tinyusdz_SRC_ABSPATH}/tydra/attribute-eval-typed-animatable.cc
@@ -1086,6 +1109,7 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
             ${Tinyusdz_SRC_ABSPATH}/usdMtlx.cc
             ${Tinyusdz_SRC_ABSPATH}/usdShade.cc
             ${Tinyusdz_SRC_ABSPATH}/usdSkel.cc
+            ${Tinyusdz_SRC_ABSPATH}/uuid-gen.cc
             ${Tinyusdz_SRC_ABSPATH}/value-pprint.cc
             ${Tinyusdz_SRC_ABSPATH}/value-types.cc
             ${Tinyusdz_SRC_ABSPATH}/xform.cc
@@ -1101,9 +1125,13 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
             ${Tinyusdz_SRC_ABSPATH}/integerCoding.cpp
             ${Tinyusdz_SRC_ABSPATH}/lz4-compression.cc
             ${Tinyusdz_SRC_ABSPATH}/lz4/lz4.c
+            ${Tinyusdz_REPO_ABSPATH}/tinyusdz_repo-src/sandbox/path-sort-and-encode-crate/src/path_sort.cc
+            ${Tinyusdz_REPO_ABSPATH}/tinyusdz_repo-src/sandbox/path-sort-and-encode-crate/src/tree_encode.cc
     )
 
-    set(tinyusdz_INCLUDE_DIRS "${Tinyusdz_SRC_ABSPATH}")
+    set(tinyusdz_INCLUDE_DIRS
+            "${Tinyusdz_SRC_ABSPATH}"
+            "${Tinyusdz_REPO_ABSPATH}/tinyusdz_repo-src/sandbox/path-sort-and-encode-crate/include")
     INCLUDE_DIRECTORIES(${tinyusdz_INCLUDE_DIRS})
     SOURCE_GROUP( Contrib\\Tinyusdz
             FILES
@@ -1111,11 +1139,11 @@ IF (ASSIMP_BUILD_USD_IMPORTER)
             ${Tinyusdz_DEP_SOURCES}
     )
     MESSAGE(STATUS "tinyusdz enabled")
-ELSE() # IF (ASSIMP_BUILD_USD_IMPORTER)
+ELSE() # IF (ASSIMP_BUILD_USD_IMPORTER OR ASSIMP_BUILD_TINYUSDZ)
     set(Tinyusdz_SRCS "")
     set(Tinyusdz_DEP_SOURCES "")
     MESSAGE(STATUS "tinyusdz disabled")
-ENDIF() # IF (ASSIMP_BUILD_USD_IMPORTER)
+ENDIF() # IF (ASSIMP_BUILD_USD_IMPORTER OR ASSIMP_BUILD_TINYUSDZ)
 
 # Web-IFC support (Web-IFC ONLY - no old implementation)
 IF (ASSIMP_BUILD_IFC_IMPORTER)

@@ -68,7 +68,7 @@ class D3MFExporter {
 public:
     D3MFExporter( const char* pFile, const aiScene* pScene );
     ~D3MFExporter();
-    bool validate();
+    bool validate() const;
     bool exportArchive( const char *file );
     const std::vector<uint8_t>& GetArchiveBuffer() const;
     bool exportContentTypes();
@@ -109,4 +109,3 @@ private:
 
 #endif // ASSIMP_BUILD_NO_3MF_EXPORTER
 #endif // ASSIMP_BUILD_NO_EXPORT
-

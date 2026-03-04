@@ -59,6 +59,7 @@ OPTION(ASSIMP_BUILD_M3D_EXPORTER "Enable M3D file export" off)
 # auto-cloned during build; so MUST disable the feature or the PR will be rejected
 OPTION(ASSIMP_BUILD_USD_IMPORTER "Enable USD file import" off)
 OPTION(ASSIMP_BUILD_USD_VERBOSE_LOGS "Enable verbose USD import debug logging" off)
+OPTION(ASSIMP_BUILD_TINYUSDZ "Enable tinyusdz core sources" off)
 
 # VRML (.wrl/.x3dv) file import support by leveraging X3D importer and 3rd party file
 # format converter to convert .wrl/.x3dv files to X3D-compatible .xml
