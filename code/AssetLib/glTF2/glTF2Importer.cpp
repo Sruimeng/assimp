@@ -580,14 +580,93 @@ void glTF2Importer::ImportMeshes(glTF2::Asset &r) {
             }
 
             if (!attr.position.empty() && attr.position[0]) {
-                aim->mNumVertices = static_cast<unsigned int>(attr.position[0]->ExtractData(aim->mVertices, vertexRemappingTable));
+                auto& posAcc = *attr.position[0];
+                if (posAcc.componentType == ComponentType_SHORT || posAcc.componentType == ComponentType_BYTE) {
+                    // KHR_mesh_quantization: SNORM16/SNORM8 positions need explicit conversion to float.
+                    // Raw memcpy packs integer bytes into float layout producing near-zero garbage.
+                    const size_t posStride = posAcc.GetStride();
+                    uint8_t *posPtr = posAcc.GetPointer();
+                    const size_t usedCount = (vertexRemappingTable && !vertexRemappingTable->empty())
+                                                    ? vertexRemappingTable->size()
+                                                    : posAcc.count;
+                    aim->mNumVertices = static_cast<unsigned int>(usedCount);
+                    aim->mVertices = new aiVector3D[usedCount];
+                    if (posAcc.componentType == ComponentType_SHORT) {
+                        const float invPos = 1.0f / 32767.0f;
+                        if (vertexRemappingTable && !vertexRemappingTable->empty()) {
+                            for (unsigned int i = 0; i < usedCount; ++i) {
+                                const int16_t *p = reinterpret_cast<const int16_t *>(posPtr + (*vertexRemappingTable)[i] * posStride);
+                                aim->mVertices[i] = aiVector3D(std::max(p[0] * invPos, -1.f), std::max(p[1] * invPos, -1.f), std::max(p[2] * invPos, -1.f));
+                            }
+                        } else {
+                            for (unsigned int i = 0; i < usedCount; ++i) {
+                                const int16_t *p = reinterpret_cast<const int16_t *>(posPtr + i * posStride);
+                                aim->mVertices[i] = aiVector3D(std::max(p[0] * invPos, -1.f), std::max(p[1] * invPos, -1.f), std::max(p[2] * invPos, -1.f));
+                            }
+                        }
+                    } else {
+                        const float invPos = 1.0f / 127.0f;
+                        if (vertexRemappingTable && !vertexRemappingTable->empty()) {
+                            for (unsigned int i = 0; i < usedCount; ++i) {
+                                const int8_t *p = reinterpret_cast<const int8_t *>(posPtr + (*vertexRemappingTable)[i] * posStride);
+                                aim->mVertices[i] = aiVector3D(std::max(p[0] * invPos, -1.f), std::max(p[1] * invPos, -1.f), std::max(p[2] * invPos, -1.f));
+                            }
+                        } else {
+                            for (unsigned int i = 0; i < usedCount; ++i) {
+                                const int8_t *p = reinterpret_cast<const int8_t *>(posPtr + i * posStride);
+                                aim->mVertices[i] = aiVector3D(std::max(p[0] * invPos, -1.f), std::max(p[1] * invPos, -1.f), std::max(p[2] * invPos, -1.f));
+                            }
+                        }
+                    }
+                } else {
+                    aim->mNumVertices = static_cast<unsigned int>(posAcc.ExtractData(aim->mVertices, vertexRemappingTable));
+                }
             }
 
             if (!attr.normal.empty() && attr.normal[0]) {
                     if (attr.normal[0]->count != numAllVertices) {
                     DefaultLogger::get()->warn("Normal count in mesh \"", mesh.name, "\" does not match the vertex count, normals ignored.");
                 } else {
-                    attr.normal[0]->ExtractData(aim->mNormals, vertexRemappingTable);
+                    // SNORM8/SNORM16 normals (e.g. from EXT_meshopt_compression OCTAHEDRAL) need
+                    // explicit conversion to float; raw memcpy produces near-zero garbage values.
+                    {
+                        auto& acc = *attr.normal[0];
+                        const size_t stride = acc.GetStride();
+                        uint8_t* rawPtr = acc.GetPointer();
+                        // Use aim->mNumVertices (post-dedup count) to match position extraction.
+                        const unsigned int nVerts = aim->mNumVertices;
+                        if (acc.componentType == ComponentType_BYTE) {
+                            const float inv = 1.0f / 127.0f;
+                            aim->mNormals = new aiVector3D[nVerts];
+                            if (vertexRemappingTable && !vertexRemappingTable->empty()) {
+                                for (unsigned int i = 0; i < nVerts; ++i) {
+                                    const int8_t* p = reinterpret_cast<const int8_t*>(rawPtr + (*vertexRemappingTable)[i] * stride);
+                                    aim->mNormals[i] = aiVector3D(std::max(p[0]*inv,-1.f), std::max(p[1]*inv,-1.f), std::max(p[2]*inv,-1.f));
+                                }
+                            } else {
+                                for (unsigned int i = 0; i < nVerts; ++i) {
+                                    const int8_t* p = reinterpret_cast<const int8_t*>(rawPtr + i * stride);
+                                    aim->mNormals[i] = aiVector3D(std::max(p[0]*inv,-1.f), std::max(p[1]*inv,-1.f), std::max(p[2]*inv,-1.f));
+                                }
+                            }
+                        } else if (acc.componentType == ComponentType_SHORT) {
+                            const float inv = 1.0f / 32767.0f;
+                            aim->mNormals = new aiVector3D[nVerts];
+                            if (vertexRemappingTable && !vertexRemappingTable->empty()) {
+                                for (unsigned int i = 0; i < nVerts; ++i) {
+                                    const int16_t* p = reinterpret_cast<const int16_t*>(rawPtr + (*vertexRemappingTable)[i] * stride);
+                                    aim->mNormals[i] = aiVector3D(std::max(p[0]*inv,-1.f), std::max(p[1]*inv,-1.f), std::max(p[2]*inv,-1.f));
+                                }
+                            } else {
+                                for (unsigned int i = 0; i < nVerts; ++i) {
+                                    const int16_t* p = reinterpret_cast<const int16_t*>(rawPtr + i * stride);
+                                    aim->mNormals[i] = aiVector3D(std::max(p[0]*inv,-1.f), std::max(p[1]*inv,-1.f), std::max(p[2]*inv,-1.f));
+                                }
+                            }
+                        } else {
+                            acc.ExtractData(aim->mNormals, vertexRemappingTable);
+                        }
+                    }
 
                     // only extract tangents if normals are present
                     if (!attr.tangent.empty() && attr.tangent[0]) {
