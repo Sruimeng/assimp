@@ -228,7 +228,7 @@ void USDZExporter::ExportMetadata() {
     stageMeta.upAxis = tinyusdz::Axis::Y; // Y-up coordinate system for AR
     
     // Add generator information to customLayerData (Apple's approach)
-    stageMeta.customLayerData["generator"] = tinyusdz::MetaVariable(std::string("Assimp"));
+    stageMeta.customLayerData["generator"] = tinyusdz::MetaVariable(std::string("Tripo"));
     
     // Set defaultPrim to root scene node (will be set after scene structure is created)
     // This follows Apple's pattern of having a single root prim containing everything

@@ -207,7 +207,7 @@ bool D3MFExporter::export3DModel() {
     mModelOutput.clear();
 
     writeHeader();
-    mModelOutput << "<" << XmlTag::model << " " << XmlTag::model_unit << "=\"millimeter\""
+    mModelOutput << "<" << XmlTag::model << " " << XmlTag::model_unit << "=\"meter\""
                  << " xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">"
                  << std::endl;
     mModelOutput << "<" << XmlTag::resources << ">";
@@ -311,27 +311,23 @@ void D3MFExporter::writeBaseMaterials() {
 }
 
 void D3MFExporter::writeObjects() {
-    if (nullptr == mScene->mRootNode) {
+    if (nullptr == mScene || mScene->mNumMeshes == 0) {
         return;
     }
 
-    aiNode *root = mScene->mRootNode;
-    for (unsigned int i = 0; i < root->mNumChildren; ++i) {
-        aiNode *currentNode(root->mChildren[i]);
-        if (nullptr == currentNode) {
+    // 直接遍历场景中的所有 mesh，而不是通过节点树
+    // 3MF 格式不需要节点层级，只需要 mesh 数据
+    for (unsigned int i = 0; i < mScene->mNumMeshes; ++i) {
+        aiMesh *currentMesh = mScene->mMeshes[i];
+        if (nullptr == currentMesh) {
             continue;
         }
-        mModelOutput << "<" << XmlTag::object << " id=\"" << i + 2 << "\" type=\"model\">";
-        mModelOutput << std::endl;
-        for (unsigned int j = 0; j < currentNode->mNumMeshes; ++j) {
-            aiMesh *currentMesh = mScene->mMeshes[currentNode->mMeshes[j]];
-            if (nullptr == currentMesh) {
-                continue;
-            }
-            writeMesh(currentMesh);
-        }
-        mBuildItems.push_back(i);
 
+        unsigned int objectId = i + 2;
+        mModelOutput << "<" << XmlTag::object << " id=\"" << objectId << "\" type=\"model\">";
+        mModelOutput << std::endl;
+        writeMesh(currentMesh);
+        mBuildItems.push_back(i);
         mModelOutput << "</" << XmlTag::object << ">";
         mModelOutput << std::endl;
     }

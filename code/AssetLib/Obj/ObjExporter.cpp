@@ -169,9 +169,7 @@ std::string ObjExporter::GetMaterialLibFileName() {
 
 // ------------------------------------------------------------------------------------------------
 void ObjExporter::WriteHeader(std::ostringstream& out) {
-    out << "# File produced by Open Asset Import Library (http://www.assimp.sf.net)" << endl;
-    out << "# (assimp v" << aiGetVersionMajor() << '.' << aiGetVersionMinor() << '.'
-        << aiGetVersionRevision() << ")" << endl  << endl;
+    out << "# File produced by Tripo" << endl << endl;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -254,9 +252,16 @@ void ObjExporter::WriteMaterialFile() {
             mOutputMat << "map_d " << s.data << endl;
         }
         if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_HEIGHT(0),s) || AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_NORMALS(0),s)) {
-            // implementations seem to vary here, so write both variants
-            mOutputMat << "bump " << s.data << endl;
-            mOutputMat << "map_bump " << s.data << endl;
+            mOutputMat << "map_Bump -bm 1.000000 " << s.data << endl;
+        }
+        // PBR extensions (OBJ MTL PBR spec)
+        if(AI_SUCCESS == mat->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &s)) {
+            mOutputMat << "map_Ns " << s.data << endl;
+            mOutputMat << "map_Pr " << s.data << endl;
+        }
+        if(AI_SUCCESS == mat->GetTexture(aiTextureType_METALNESS, 0, &s)) {
+            mOutputMat << "map_refl " << s.data << endl;
+            mOutputMat << "map_Pm " << s.data << endl;
         }
 
         mOutputMat << endl;
