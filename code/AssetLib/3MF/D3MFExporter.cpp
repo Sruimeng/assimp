@@ -207,7 +207,7 @@ bool D3MFExporter::export3DModel() {
     mModelOutput.clear();
 
     writeHeader();
-    mModelOutput << "<" << XmlTag::model << " " << XmlTag::model_unit << "=\"meter\""
+    mModelOutput << "<" << XmlTag::model << " " << XmlTag::model_unit << "=\"millimeter\""
                  << " xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">"
                  << std::endl;
     mModelOutput << "<" << XmlTag::resources << ">";

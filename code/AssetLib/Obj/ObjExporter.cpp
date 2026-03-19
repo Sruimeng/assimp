@@ -251,7 +251,10 @@ void ObjExporter::WriteMaterialFile() {
         if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_OPACITY(0),s)) {
             mOutputMat << "map_d " << s.data << endl;
         }
-        if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_HEIGHT(0),s) || AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_NORMALS(0),s)) {
+        if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_NORMALS(0),s)) {
+            mOutputMat << "map_Kn " << s.data << endl;
+        }
+        if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_HEIGHT(0),s)) {
             mOutputMat << "map_Bump -bm 1.000000 " << s.data << endl;
         }
         // PBR extensions (OBJ MTL PBR spec)
