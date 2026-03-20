@@ -43,6 +43,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "glTF2Importer.h"
 #include "glTF2Asset.h"
+#include "KTX2Decoder.h"
 #include "PostProcessing/MakeVerboseFormat.h"
 
 #if !defined(ASSIMP_BUILD_NO_EXPORT)
@@ -67,10 +68,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rapidjson/rapidjson.h>
 
 using namespace Assimp;
-using namespace glTF2;
 using namespace glTFCommon;
 
 namespace {
+
+using namespace glTF2;
 
 // generate bi-tangents from normals and tangents according to spec
 struct Tangent {
@@ -153,8 +155,8 @@ static inline void SetMaterialColorProperty(Asset & /*r*/, vec3 &prop, aiMateria
     mat->AddProperty(&col, 1, pKey, type, idx);
 }
 
-static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, Asset & /*r*/,
-        TextureInfo prop, aiMaterial *mat, aiTextureType texType,
+static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, glTF2::Asset & /*r*/,
+        glTF2::TextureInfo prop, aiMaterial *mat, aiTextureType texType,
         unsigned int texSlot = 0) {
     if (prop.texture && prop.texture->source) {
         aiString uri(prop.texture->source->uri);
@@ -220,20 +222,20 @@ static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, Asset 
     }
 }
 
-static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, Asset &r,
-        NormalTextureInfo &prop, aiMaterial *mat, aiTextureType texType,
+static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, glTF2::Asset &r,
+        glTF2::NormalTextureInfo &prop, aiMaterial *mat, aiTextureType texType,
         unsigned int texSlot = 0) {
-    SetMaterialTextureProperty(embeddedTexIdxs, r, static_cast<TextureInfo>(prop), mat, texType, texSlot);
+    SetMaterialTextureProperty(embeddedTexIdxs, r, static_cast<glTF2::TextureInfo>(prop), mat, texType, texSlot);
 
     if (prop.texture && prop.texture->source) {
         mat->AddProperty(&prop.scale, 1, AI_MATKEY_GLTF_TEXTURE_SCALE(texType, texSlot));
     }
 }
 
-static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, Asset &r,
-        OcclusionTextureInfo &prop, aiMaterial *mat, aiTextureType texType,
+static void SetMaterialTextureProperty(std::vector<int> &embeddedTexIdxs, glTF2::Asset &r,
+        glTF2::OcclusionTextureInfo &prop, aiMaterial *mat, aiTextureType texType,
         unsigned int texSlot = 0) {
-    SetMaterialTextureProperty(embeddedTexIdxs, r, static_cast<TextureInfo>(prop), mat, texType, texSlot);
+    SetMaterialTextureProperty(embeddedTexIdxs, r, static_cast<glTF2::TextureInfo>(prop), mat, texType, texSlot);
 
     if (prop.texture && prop.texture->source) {
         std::string textureStrengthKey = std::string(_AI_MATKEY_TEXTURE_BASE) + "." + "strength";
@@ -1749,8 +1751,26 @@ void glTF2Importer::ImportTextures(glTF2::Asset &r) {
             if (ext) {
                 if (strncmp(ext, "jpeg", 4) == 0) {
                     ext = "jpg";
-                } else if (strcmp(ext, "ktx2") == 0) { // basisu: ktx remains
+                } else if (strcmp(ext, "ktx2") == 0) {
+#ifdef ASSIMP_ENABLE_KTX2_DECODER
+                    // Decode KTX2 to PNG
+                    std::vector<uint8_t> pngData;
+                    uint32_t w, h;
+                    if (Assimp::DecodeKTX2ToPNG(reinterpret_cast<const uint8_t*>(data), length, pngData, w, h)) {
+                        delete[] reinterpret_cast<uint8_t*>(data);
+                        tex->mWidth = static_cast<unsigned int>(pngData.size());
+                        tex->mHeight = 0;
+                        uint8_t* newData = new uint8_t[pngData.size()];
+                        std::memcpy(newData, pngData.data(), pngData.size());
+                        tex->pcData = reinterpret_cast<aiTexel*>(newData);
+                        ext = "png";
+                    } else {
+                        ASSIMP_LOG_WARN("KTX2 decode failed, using raw data");
+                        ext = "kx2";
+                    }
+#else
                     ext = "kx2";
+#endif
                 } else if (strcmp(ext, "basis") == 0) { // basisu
                     ext = "bu";
                 }

@@ -888,6 +888,8 @@ ADD_ASSIMP_IMPORTER( GLTF
   AssetLib/glTF2/glTF2AssetWriter.inl
   AssetLib/glTF2/glTF2Importer.cpp
   AssetLib/glTF2/glTF2Importer.h
+  AssetLib/glTF2/KTX2Decoder.h
+  AssetLib/glTF2/KTX2Decoder.cpp
 )
 
 ADD_ASSIMP_IMPORTER(3MF
@@ -1483,6 +1485,28 @@ ELSE()
   SET( Meshopt_SRCS "" )
 ENDIF()
 
+# Basis Universal (for KTX2 decoding)
+IF (ASSIMP_BUILD_KTX2_DECODER)
+  SET( BasisU_SRCS
+    ../contrib/basis_universal/transcoder/basisu_transcoder.cpp
+  )
+  INCLUDE_DIRECTORIES("../contrib/basis_universal/transcoder")
+  ADD_DEFINITIONS( -DBASISU_NO_ITERATOR_DEBUG_LEVEL )
+
+  # Disable deprecated builtin warnings for basis_universal
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR EMSCRIPTEN)
+    set_source_files_properties(
+      ../contrib/basis_universal/transcoder/basisu_transcoder.cpp
+      AssetLib/glTF2/KTX2Decoder.cpp
+      PROPERTIES COMPILE_FLAGS "-Wno-error=deprecated-builtins -Wno-deprecated-builtins"
+    )
+  endif()
+
+  SOURCE_GROUP( Contrib\\BasisUniversal FILES ${BasisU_SRCS})
+ELSE()
+  SET( BasisU_SRCS "" )
+ENDIF()
+
 # Open3DGC
 IF(ASSIMP_HUNTER_ENABLED)
   # Nothing to do, not available in Hunter yet.
@@ -1618,6 +1642,7 @@ SET( assimp_src
   ${Tinyusdz_DEP_SOURCES}
   ${WebIFC_SRCS}
   ${Meshopt_SRCS}
+  ${BasisU_SRCS}
   ${Pugixml_SRCS}
   ${stb_SRCS}
   # Necessary to show the headers in the project when using the VC++ generator:
@@ -1646,6 +1671,10 @@ ENDIF()
 
 IF (ASSIMP_BUILD_MESHOPT)
   ADD_DEFINITIONS( -DASSIMP_ENABLE_MESHOPT )
+ENDIF()
+
+IF (ASSIMP_BUILD_KTX2_DECODER)
+  ADD_DEFINITIONS( -DASSIMP_ENABLE_KTX2_DECODER )
 ENDIF()
 
 ADD_LIBRARY( assimp ${assimp_src} )
