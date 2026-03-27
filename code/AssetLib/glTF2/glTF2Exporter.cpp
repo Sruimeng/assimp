@@ -1099,29 +1099,72 @@ void ExportSkin(Asset &mAsset, const aiMesh *aimesh, Ref<Mesh> &meshRef, Ref<Buf
     size_t numGroups = (maxJointsPerVertex - 1) / 4 + 1;
     vec4 *vertexJointData = new vec4[NumVerts * numGroups];
     vec4 *vertexWeightData = new vec4[NumVerts * numGroups];
+
+    // Initialize all data to zero
+    for (size_t i = 0; i < NumVerts * numGroups; ++i) {
+        for (size_t j = 0; j < 4; ++j) {
+            vertexJointData[i][j] = 0.f;
+            vertexWeightData[i][j] = 0.f;
+        }
+    }
+
     for (size_t indexVertex = 0; indexVertex < NumVerts; ++indexVertex) {
         // order pairs by weight for each vertex
         std::sort(allVerticesPairs[indexVertex].begin(),
                 allVerticesPairs[indexVertex].end(),
                 boneIndexWeightPair());
+
+        // Calculate weight sum and filter out near-zero weights
+        float weightSum = 0.0f;
+        std::vector<boneIndexWeightPair> validPairs;
+        const float MIN_WEIGHT = 1e-6f;
+
+        for (const auto& pair : allVerticesPairs[indexVertex]) {
+            if (pair.weight > MIN_WEIGHT) {
+                validPairs.push_back(pair);
+                weightSum += pair.weight;
+            }
+        }
+
+        // Handle orphan vertices (no valid bone weights)
+        if (validPairs.empty() || weightSum < MIN_WEIGHT) {
+            // Assign to first joint with full weight (glTF fallback)
+            size_t indexData = indexVertex;
+            vertexJointData[indexData][0] = 0.f;
+            vertexWeightData[indexData][0] = 1.0f;
+            continue;
+        }
+
+        // Normalize and assign weights
         for (size_t indexGroup = 0; indexGroup < numGroups; ++indexGroup) {
             for (size_t indexJoint = 0; indexJoint < 4; ++indexJoint) {
                 size_t indexBone = indexGroup * 4 + indexJoint;
                 size_t indexData = indexVertex + NumVerts * indexGroup;
-                if (indexBone >= allVerticesPairs[indexVertex].size()) {
-                    vertexJointData[indexData][indexJoint] = 0.f;
-                    vertexWeightData[indexData][indexJoint] = 0.f;
-                } else {
+
+                if (indexBone < validPairs.size()) {
+                    float normalizedWeight = validPairs[indexBone].weight / weightSum;
                     vertexJointData[indexData][indexJoint] =
-                    static_cast<float>(
-                            allVerticesPairs[indexVertex][indexBone].indexJoint);
-                    vertexWeightData[indexData][indexJoint] =
-                            allVerticesPairs[indexVertex][indexBone].weight;
+                        static_cast<float>(validPairs[indexBone].indexJoint);
+                    vertexWeightData[indexData][indexJoint] = normalizedWeight;
                 }
+                // else: already initialized to 0
             }
         }
     }
 
+    // Export WEIGHTS first (before modifying buffer with JOINTS conversion)
+    for (size_t idx_group = 0; idx_group < numGroups; ++idx_group) {
+        Mesh::Primitive &p = meshRef->primitives.back();
+        Ref<Accessor> vertexWeightAccessor = ExportData(
+            mAsset, skinRef->id, bufferRef, aimesh->mNumVertices,
+            vertexWeightData + idx_group * NumVerts,
+            AttribType::VEC4, AttribType::VEC4, ComponentType_FLOAT);
+        if (vertexWeightAccessor) {
+            p.attributes.weight.push_back(vertexWeightAccessor);
+        }
+    }
+
+    // Then export and convert JOINTS (FLOAT -> UNSIGNED_SHORT)
     for (size_t idx_group = 0; idx_group < numGroups; ++idx_group) {
         Mesh::Primitive &p = meshRef->primitives.back();
         Ref<Accessor> vertexJointAccessor = ExportData(
@@ -1137,7 +1180,7 @@ void ExportSkin(Asset &mAsset, const aiMesh *aimesh, Ref<Mesh> &meshRef, Ref<Buf
                 ComponentTypeSize(vertexJointAccessor->componentType);
             size_t s_bytesLen = bytesLen * s_bytesPerComp / bytesPerComp;
             Ref<Buffer> buf = vertexJointAccessor->bufferView->buffer;
-            uint8_t *arrys = new uint8_t[bytesLen];
+            uint8_t *arrys = new uint8_t[s_bytesLen];
             unsigned int i = 0;
             for (unsigned int j = 0; j < bytesLen; j += bytesPerComp) {
                 size_t len_p = offset + j;
@@ -1146,19 +1189,12 @@ void ExportSkin(Asset &mAsset, const aiMesh *aimesh, Ref<Mesh> &meshRef, Ref<Buf
                 memcpy(&arrys[i * s_bytesPerComp], &c, s_bytesPerComp);
                 ++i;
             }
-            buf->ReplaceData_joint(offset, bytesLen, arrys, bytesLen);
+            buf->ReplaceData_joint(offset, bytesLen, arrys, s_bytesLen);
             vertexJointAccessor->componentType = ComponentType_UNSIGNED_SHORT;
             vertexJointAccessor->bufferView->byteLength = s_bytesLen;
 
             p.attributes.joint.push_back(vertexJointAccessor);
             delete[] arrys;
-        }
-        Ref<Accessor> vertexWeightAccessor = ExportData(
-            mAsset, skinRef->id, bufferRef, aimesh->mNumVertices,
-            vertexWeightData + idx_group * NumVerts,
-            AttribType::VEC4, AttribType::VEC4, ComponentType_FLOAT);
-        if (vertexWeightAccessor) {
-            p.attributes.weight.push_back(vertexWeightAccessor);
         }
     }
     delete[] jointsPerVertex;

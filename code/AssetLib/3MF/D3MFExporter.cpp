@@ -94,6 +94,15 @@ void ExportScene3MF(const char *pFile, IOSystem *pIOSystem, const aiScene *pScen
 
 namespace D3MF {
 
+static bool IsIdentityTransform(const aiMatrix4x4 &m) {
+    const float eps = 1e-6f;
+    return std::abs(m.a1 - 1.0f) < eps && std::abs(m.b2 - 1.0f) < eps && std::abs(m.c3 - 1.0f) < eps && std::abs(m.d4 - 1.0f) < eps &&
+            std::abs(m.a2) < eps && std::abs(m.a3) < eps && std::abs(m.a4) < eps &&
+            std::abs(m.b1) < eps && std::abs(m.b3) < eps && std::abs(m.b4) < eps &&
+            std::abs(m.c1) < eps && std::abs(m.c2) < eps && std::abs(m.c4) < eps &&
+            std::abs(m.d1) < eps && std::abs(m.d2) < eps && std::abs(m.d3) < eps;
+}
+
 D3MFExporter::D3MFExporter(const char *pFile, const aiScene *pScene) :
         mArchiveName(pFile), m_zipArchive(nullptr), mScene(pScene) {
     // empty
@@ -315,8 +324,6 @@ void D3MFExporter::writeObjects() {
         return;
     }
 
-    // 直接遍历场景中的所有 mesh，而不是通过节点树
-    // 3MF 格式不需要节点层级，只需要 mesh 数据
     for (unsigned int i = 0; i < mScene->mNumMeshes; ++i) {
         aiMesh *currentMesh = mScene->mMeshes[i];
         if (nullptr == currentMesh) {
@@ -327,9 +334,25 @@ void D3MFExporter::writeObjects() {
         mModelOutput << "<" << XmlTag::object << " id=\"" << objectId << "\" type=\"model\">";
         mModelOutput << std::endl;
         writeMesh(currentMesh);
-        mBuildItems.push_back(i);
         mModelOutput << "</" << XmlTag::object << ">";
         mModelOutput << std::endl;
+    }
+
+    mBuildItems.clear();
+    if (mScene->mRootNode == nullptr) {
+        return;
+    }
+    collectBuildItems(mScene->mRootNode, aiMatrix4x4());
+    if (!mBuildItems.empty()) {
+        return;
+    }
+    for (unsigned int i = 0; i < mScene->mNumMeshes; ++i) {
+        if (mScene->mMeshes[i] == nullptr) {
+            continue;
+        }
+        BuildItem item;
+        item.objectId = i + 2;
+        mBuildItems.push_back(item);
     }
 }
 
@@ -395,12 +418,53 @@ void D3MFExporter::writeBuild() {
                  << ">"
                  << "\n";
 
-    for (size_t i = 0; i < mBuildItems.size(); ++i) {
-        mModelOutput << "<" << XmlTag::item << " objectid=\"" << i + 2 << "\"/>";
+    for (const BuildItem &item : mBuildItems) {
+        mModelOutput << "<" << XmlTag::item << " objectid=\"" << item.objectId << "\"";
+        if (item.hasTransform) {
+            mModelOutput << " transform=\"";
+            writeTransform(item.transform);
+            mModelOutput << "\"";
+        }
+        mModelOutput << "/>";
         mModelOutput << "\n";
     }
     mModelOutput << "</" << XmlTag::build << ">";
     mModelOutput << "\n";
+}
+
+void D3MFExporter::collectBuildItems(const aiNode *node, const aiMatrix4x4 &parentTransform) {
+    if (node == nullptr) {
+        return;
+    }
+
+    aiMatrix4x4 currentTransform = parentTransform * node->mTransformation;
+    for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
+        unsigned int meshIndex = node->mMeshes[i];
+        if (meshIndex >= mScene->mNumMeshes || mScene->mMeshes[meshIndex] == nullptr) {
+            continue;
+        }
+        BuildItem item;
+        item.objectId = meshIndex + 2;
+        item.transform = currentTransform;
+        item.hasTransform = !IsIdentityTransform(currentTransform);
+        mBuildItems.push_back(item);
+    }
+
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        collectBuildItems(node->mChildren[i], currentTransform);
+    }
+}
+
+void D3MFExporter::writeTransform(const aiMatrix4x4 &transform) {
+    std::ios::fmtflags oldFlags = mModelOutput.flags();
+    std::streamsize oldPrecision = mModelOutput.precision();
+    mModelOutput << std::setprecision(9);
+    mModelOutput << transform.a1 << " " << transform.b1 << " " << transform.c1 << " "
+                 << transform.a2 << " " << transform.b2 << " " << transform.c2 << " "
+                 << transform.a3 << " " << transform.b3 << " " << transform.c3 << " "
+                 << transform.a4 << " " << transform.b4 << " " << transform.c4;
+    mModelOutput.flags(oldFlags);
+    mModelOutput.precision(oldPrecision);
 }
 
 void D3MFExporter::zipContentType(const std::string &filename) {

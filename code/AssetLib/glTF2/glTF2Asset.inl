@@ -718,7 +718,7 @@ inline bool Buffer::ReplaceData(const size_t pBufferData_Offset, const size_t pB
     // Copy new data.
     ::memcpy(&new_data[pBufferData_Offset], pReplace_Data, pReplace_Count);
     // Copy data which place after replacing part.
-    ::memcpy(&new_data[pBufferData_Offset + pReplace_Count], &mData.get()[pBufferData_Offset + pBufferData_Count], pBufferData_Offset);
+    ::memcpy(&new_data[pBufferData_Offset + pReplace_Count], &mData.get()[pBufferData_Offset + pBufferData_Count], new_data_size - (pBufferData_Offset + pReplace_Count));
     // Apply new data
     mData.reset(new_data, std::default_delete<uint8_t[]>());
     byteLength = new_data_size;

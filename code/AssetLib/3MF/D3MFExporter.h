@@ -46,7 +46,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <memory>
 #include <sstream>
 #include <vector>
+#include <assimp/matrix4x4.h>
 #include <assimp/vector3.h>
+
+#include "D3MFOpcPackage.h"
 
 struct aiScene;
 struct aiNode;
@@ -61,8 +64,11 @@ class IOStream;
 
 namespace D3MF {
 
-
-struct OpcPackageRelationship;
+struct BuildItem {
+    unsigned int objectId = 0;
+    aiMatrix4x4 transform;
+    bool hasTransform = false;
+};
 
 class D3MFExporter {
 public:
@@ -84,6 +90,8 @@ protected:
     void writeVertex( const aiVector3D &pos );
     void writeFaces( aiMesh *mesh, unsigned int matIdx );
     void writeBuild();
+    void collectBuildItems( const aiNode *node, const aiMatrix4x4 &parentTransform );
+    void writeTransform( const aiMatrix4x4 &transform );
 
     // Zip the data
     void zipContentType( const std::string &filename );
@@ -98,7 +106,7 @@ private:
     std::ostringstream mModelOutput;
     std::ostringstream mRelOutput;
     std::ostringstream mContentOutput;
-    std::vector<unsigned int> mBuildItems;
+    std::vector<BuildItem> mBuildItems;
     std::vector<OpcPackageRelationship*> mRelations;
     std::vector<uint8_t> mArchiveBuffer;
 };
