@@ -364,8 +364,13 @@ void FBXExporter::WriteHeaderExtension ()
     CreationTimeStamp.AddChild("Millisecond", int32_t(0));
     CreationTimeStamp.Dump(outstream, binary, indent);
 
+    aiString customCreator;
+    std::string creator = "Tripo";
+    if (mScene->mMetaData != nullptr && mScene->mMetaData->Get("Creator", customCreator)) {
+        creator = customCreator.C_Str();
+    }
     FBX::Node::WritePropertyNode(
-        "Creator", std::string("Tripo"), outstream, binary, indent
+        "Creator", creator, outstream, binary, indent
     );
 
     indent = 0;
@@ -388,7 +393,7 @@ void FBXExporter::WriteHeaderExtension ()
         "CreationTime", GENERIC_CTIME, outstream, binary, indent
     );
     FBX::Node::WritePropertyNode(
-        "Creator", std::string("Tripo"), outstream, binary, indent
+        "Creator", creator, outstream, binary, indent
     );
 }
 

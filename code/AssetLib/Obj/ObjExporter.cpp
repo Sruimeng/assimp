@@ -169,7 +169,12 @@ std::string ObjExporter::GetMaterialLibFileName() {
 
 // ------------------------------------------------------------------------------------------------
 void ObjExporter::WriteHeader(std::ostringstream& out) {
-    out << "# File produced by Tripo" << endl << endl;
+    aiString customCreator;
+    std::string creator = "Tripo";
+    if (pScene->mMetaData != nullptr && pScene->mMetaData->Get("Creator", customCreator)) {
+        creator = customCreator.C_Str();
+    }
+    out << "# File produced by " << creator << endl << endl;
 }
 
 // ------------------------------------------------------------------------------------------------

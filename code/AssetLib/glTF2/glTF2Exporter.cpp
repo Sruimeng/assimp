@@ -1630,7 +1630,13 @@ void glTF2Exporter::ExportMetadata() {
     AssetMetadata &asset = mAsset->asset;
     asset.version = "2.0";
 
-    asset.generator = "Tripo";
+    // Custom generator injected via scene metadata (e.g. CN branding)
+    aiString custom_generator;
+    if (mScene->mMetaData != nullptr && mScene->mMetaData->Get("custom_generator", custom_generator)) {
+        asset.generator = custom_generator.C_Str();
+    } else {
+        asset.generator = "Tripo";
+    }
 
     // Copyright
     aiString copyright_str;

@@ -48,6 +48,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <memory>
 #include <assimp/Exceptional.h>
 #include <assimp/ByteSwapper.h>
+#include <cstring>
 
 using namespace Assimp;
 
@@ -109,9 +110,13 @@ STLExporter::STLExporter(const char* _filename, const aiScene* pScene, bool expo
     mOutput.setf(std::ios::fixed);
     mOutput.precision(8);
     if (binary) {
+        aiString customCreator;
+        std::string creator = "AssimpScene";
+        if (pScene->mMetaData != nullptr && pScene->mMetaData->Get("Creator", customCreator)) {
+            creator = customCreator.C_Str();
+        }
         char buf[80] = {0} ;
-        buf[0] = 'A'; buf[1] = 's'; buf[2] = 's'; buf[3] = 'i'; buf[4] = 'm'; buf[5] = 'p';
-        buf[6] = 'S'; buf[7] = 'c'; buf[8] = 'e'; buf[9] = 'n'; buf[10] = 'e';
+        std::memcpy(buf, creator.c_str(), std::min<size_t>(creator.size(), 79));
         mOutput.write(buf, 80);
         unsigned int meshnum = 0;
         for(unsigned int i = 0; i < pScene->mNumMeshes; ++i) {
@@ -130,20 +135,24 @@ STLExporter::STLExporter(const char* _filename, const aiScene* pScene, bool expo
             WriteMeshBinary(pScene->mMeshes[i]);
         }
     } else {
+        aiString customCreator;
+        std::string creator = "AssimpScene";
+        if (pScene->mMetaData != nullptr && pScene->mMetaData->Get("Creator", customCreator)) {
+            creator = customCreator.C_Str();
+        }
 
         // Exporting only point clouds
         if (exportPointClouds) {
-            WritePointCloud("Assimp_Pointcloud", pScene );
+            WritePointCloud(creator, pScene );
             return;
         }
 
         // Export the assimp mesh
-        const std::string name = "AssimpScene";
-        mOutput << SolidToken << " " << name << endl;
+        mOutput << SolidToken << " " << creator << endl;
         for(unsigned int i = 0; i < pScene->mNumMeshes; ++i) {
             WriteMesh(pScene->mMeshes[ i ]);
         }
-        mOutput << EndSolidToken << " " << name << endl;
+        mOutput << EndSolidToken << " " << creator << endl;
     }
 }
 
