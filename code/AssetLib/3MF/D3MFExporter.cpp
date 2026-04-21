@@ -51,6 +51,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assimp/IOSystem.hpp>
 
 #include <cstdlib>
+#include <cstring>
+#include <unordered_map>
 
 #include "3MFXmlTags.h"
 #include "D3MFOpcPackage.h"
@@ -63,11 +65,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace Assimp {
 
-void ExportScene3MF(const char *pFile, IOSystem *pIOSystem, const aiScene *pScene, const ExportProperties * /*pProperties*/) {
+void ExportScene3MF(const char *pFile, IOSystem *pIOSystem, const aiScene *pScene, const ExportProperties *pProperties) {
     if (nullptr == pIOSystem) {
         throw DeadlyExportError("Could not export 3MP archive: " + std::string(pFile));
     }
-    D3MF::D3MFExporter myExporter(pFile, pScene);
+    const bool joinPositionVertices = (pProperties != nullptr) ?
+            pProperties->GetPropertyBool("assimpjs.3mf.join_position_vertices", false) :
+            false;
+    D3MF::D3MFExporter myExporter(pFile, pScene, joinPositionVertices);
     if (myExporter.validate()) {
         if (pIOSystem->Exists(pFile)) {
             if (!pIOSystem->DeleteFile(pFile)) {
@@ -94,6 +99,82 @@ void ExportScene3MF(const char *pFile, IOSystem *pIOSystem, const aiScene *pScen
 
 namespace D3MF {
 
+struct Vec3Key {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+
+    bool operator==(const Vec3Key &other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct Vec3KeyHash {
+    size_t operator()(const Vec3Key &k) const {
+        size_t h = static_cast<size_t>(2166136261u);
+        const uint32_t *words = reinterpret_cast<const uint32_t *>(&k);
+        for (size_t i = 0; i < 3; ++i) {
+            h ^= static_cast<size_t>(words[i]);
+            h *= static_cast<size_t>(16777619u);
+        }
+        return h;
+    }
+};
+
+struct SharedPositionMesh {
+    std::vector<aiVector3D> points;
+    std::vector<unsigned int> indices;
+};
+
+static uint32_t FloatBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static Vec3Key MakeVec3Key(const aiVector3D &value) {
+    return {FloatBits(value.x), FloatBits(value.y), FloatBits(value.z)};
+}
+
+static bool BuildSharedPositionMesh(const aiMesh *mesh, SharedPositionMesh &out) {
+    if (mesh == nullptr) {
+        return false;
+    }
+
+    out.points.clear();
+    out.indices.clear();
+
+    std::unordered_map<Vec3Key, unsigned int, Vec3KeyHash> pointMap;
+    pointMap.reserve(mesh->mNumVertices);
+    out.indices.reserve(mesh->mNumFaces * 3);
+
+    for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces; ++faceIndex) {
+        const aiFace &face = mesh->mFaces[faceIndex];
+        if (face.mNumIndices < 3) {
+            continue;
+        }
+        for (unsigned int indexIndex = 0; indexIndex < 3; ++indexIndex) {
+            const unsigned int vertexIndex = face.mIndices[indexIndex];
+            if (vertexIndex >= mesh->mNumVertices) {
+                return false;
+            }
+            const aiVector3D &position = mesh->mVertices[vertexIndex];
+            const Vec3Key key = MakeVec3Key(position);
+            auto it = pointMap.find(key);
+            if (it != pointMap.end()) {
+                out.indices.push_back(it->second);
+                continue;
+            }
+            const unsigned int pointIndex = static_cast<unsigned int>(out.points.size());
+            out.points.push_back(position);
+            pointMap.emplace(key, pointIndex);
+            out.indices.push_back(pointIndex);
+        }
+    }
+
+    return true;
+}
+
 static bool IsIdentityTransform(const aiMatrix4x4 &m) {
     const float eps = 1e-6f;
     return std::abs(m.a1 - 1.0f) < eps && std::abs(m.b2 - 1.0f) < eps && std::abs(m.c3 - 1.0f) < eps && std::abs(m.d4 - 1.0f) < eps &&
@@ -103,8 +184,8 @@ static bool IsIdentityTransform(const aiMatrix4x4 &m) {
             std::abs(m.d1) < eps && std::abs(m.d2) < eps && std::abs(m.d3) < eps;
 }
 
-D3MFExporter::D3MFExporter(const char *pFile, const aiScene *pScene) :
-        mArchiveName(pFile), m_zipArchive(nullptr), mScene(pScene) {
+D3MFExporter::D3MFExporter(const char *pFile, const aiScene *pScene, bool joinPositionVertices) :
+        mArchiveName(pFile), m_zipArchive(nullptr), mScene(pScene), mJoinPositionVertices(joinPositionVertices) {
     // empty
 }
 
@@ -361,22 +442,48 @@ void D3MFExporter::writeMesh(aiMesh *mesh) {
         return;
     }
 
+    SharedPositionMesh sharedMesh;
+    const bool useSharedPositions = mJoinPositionVertices && BuildSharedPositionMesh(mesh, sharedMesh);
+
     mModelOutput << "<"
                  << XmlTag::mesh
                  << ">" << "\n";
     mModelOutput << "<"
                  << XmlTag::vertices
                  << ">" << "\n";
-    for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
-        writeVertex(mesh->mVertices[i]);
+    if (useSharedPositions) {
+        for (size_t i = 0; i < sharedMesh.points.size(); ++i) {
+            writeVertex(sharedMesh.points[i]);
+        }
+    } else {
+        for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
+            writeVertex(mesh->mVertices[i]);
+        }
     }
     mModelOutput << "</"
                  << XmlTag::vertices << ">"
                  << "\n";
 
     const unsigned int matIdx(mesh->mMaterialIndex);
-
-    writeFaces(mesh, matIdx);
+    if (useSharedPositions) {
+        mModelOutput << "<"
+                     << XmlTag::triangles << ">"
+                     << "\n";
+        const size_t triangleCount = sharedMesh.indices.size() / 3;
+        for (size_t triangleIndex = 0; triangleIndex < triangleCount; ++triangleIndex) {
+            const size_t baseIndex = triangleIndex * 3;
+            mModelOutput << "<" << XmlTag::triangle << " v1=\"" << sharedMesh.indices[baseIndex] << "\" v2=\""
+                         << sharedMesh.indices[baseIndex + 1] << "\" v3=\"" << sharedMesh.indices[baseIndex + 2]
+                         << "\" pid=\"1\" p1=\"" + ai_to_string(matIdx) + "\" />";
+            mModelOutput << "\n";
+        }
+        mModelOutput << "</"
+                     << XmlTag::triangles
+                     << ">";
+        mModelOutput << "\n";
+    } else {
+        writeFaces(mesh, matIdx);
+    }
 
     mModelOutput << "</"
                  << XmlTag::mesh << ">"

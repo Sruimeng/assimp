@@ -72,7 +72,7 @@ struct BuildItem {
 
 class D3MFExporter {
 public:
-    D3MFExporter( const char* pFile, const aiScene* pScene );
+    D3MFExporter( const char* pFile, const aiScene* pScene, bool joinPositionVertices = false );
     ~D3MFExporter();
     bool validate() const;
     bool exportArchive( const char *file );
@@ -109,6 +109,7 @@ private:
     std::vector<BuildItem> mBuildItems;
     std::vector<OpcPackageRelationship*> mRelations;
     std::vector<uint8_t> mArchiveBuffer;
+    bool mJoinPositionVertices;
 };
 
 

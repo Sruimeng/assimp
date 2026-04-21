@@ -82,8 +82,8 @@ using namespace Assimp::FBX;
 // some constants that we'll use for writing metadata
 namespace Assimp {
 namespace FBX {
-    const std::string EXPORT_VERSION_STR = "7.5.0";
-    const uint32_t EXPORT_VERSION_INT = 7500; // 7.5 == 2016+
+    const std::string EXPORT_VERSION_STR = "7.4.0";
+    const uint32_t EXPORT_VERSION_INT = 7400; // 7.4 avoids newer binary variants that break older importers.
     // FBX files have some hashed values that depend on the creation time field,
     // but for now we don't actually know how to generate these.
     // what we can do is set them to a known-working version.
@@ -559,18 +559,27 @@ static bool has_phong_mat(const aiScene* scene) {
     return false;
 }
 
+static std::vector<const char*> GetTexturePropertyNames(aiTextureType type);
+struct TextureBinding {
+    aiTextureType type;
+    std::string texturePath;
+    std::string propertyName;
+    aiUVTransform uvTransform;
+    int priority;
+};
+static bool TryGetMetallicFactor(const aiMaterial* mat, ai_real& out);
+static bool TryGetRoughnessFactor(const aiMaterial* mat, ai_real& out);
+static ai_real RoughnessToShininess(ai_real roughness);
+static int GetTextureBindingPriority(aiTextureType type);
+static std::vector<TextureBinding> CollectTextureBindings(const aiMaterial* mat, size_t materialIndex, bool logWarnings);
+static std::string GetGeometryObjectName(const aiScene* scene, const aiNode* node);
+
 static size_t count_images(const aiScene* scene) {
     std::unordered_set<std::string> images;
-    aiString texpath;
     for (size_t i = 0; i < scene->mNumMaterials; ++i) {
-        aiMaterial *mat = scene->mMaterials[i];
-        for (size_t tt = aiTextureType_DIFFUSE; tt < aiTextureType_UNKNOWN; ++tt) {
-            const aiTextureType textype = static_cast<aiTextureType>(tt);
-            const size_t texcount = mat->GetTextureCount(textype);
-            for (unsigned int j = 0; j < texcount; ++j) {
-                mat->GetTexture(textype, j, &texpath);
-                images.insert(std::string(texpath.C_Str()));
-            }
+        const aiMaterial *mat = scene->mMaterials[i];
+        for (const TextureBinding& binding : CollectTextureBindings(mat, i, false)) {
+            images.insert(binding.texturePath);
         }
     }
 
@@ -580,17 +589,7 @@ static size_t count_images(const aiScene* scene) {
 static size_t count_textures(const aiScene* scene) {
     size_t count = 0;
     for (size_t i = 0; i < scene->mNumMaterials; ++i) {
-        aiMaterial* mat = scene->mMaterials[i];
-        for (
-            size_t tt = aiTextureType_DIFFUSE;
-            tt < aiTextureType_UNKNOWN;
-            ++tt
-        ){
-            // TODO: handle layered textures
-            if (mat->GetTextureCount(static_cast<aiTextureType>(tt)) > 0) {
-                count += 1;
-            }
-        }
+        count += CollectTextureBindings(scene->mMaterials[i], i, false).size();
     }
     return count;
 }
@@ -605,6 +604,252 @@ static size_t count_deformers(const aiScene* scene) {
         }
     }
     return count;
+}
+
+static std::vector<const char*> GetTexturePropertyNames(aiTextureType type) {
+    switch (type) {
+        case aiTextureType_DIFFUSE:
+        case aiTextureType_BASE_COLOR:
+            return { "DiffuseColor" };
+        case aiTextureType_SPECULAR:
+            return { "SpecularColor" };
+        case aiTextureType_AMBIENT:
+            return { "AmbientColor" };
+        case aiTextureType_LIGHTMAP:
+        case aiTextureType_AMBIENT_OCCLUSION:
+            return { "Maya|TEX_ao_map" };
+        case aiTextureType_EMISSIVE:
+        case aiTextureType_EMISSION_COLOR:
+            return { "EmissiveColor" };
+        case aiTextureType_HEIGHT:
+            return { "Bump" };
+        case aiTextureType_NORMALS:
+        case aiTextureType_NORMAL_CAMERA:
+            return { "NormalMap" };
+        case aiTextureType_METALNESS:
+            return { "ReflectionFactor" };
+        case aiTextureType_DIFFUSE_ROUGHNESS:
+            return { "ShininessExponent" };
+        case aiTextureType_SHININESS:
+            return { "ShininessExponent" };
+        case aiTextureType_OPACITY:
+            return { "TransparentColor" };
+        case aiTextureType_DISPLACEMENT:
+            return { "DisplacementColor" };
+        case aiTextureType_REFLECTION:
+            return { "ReflectionColor" };
+        case aiTextureType_GLTF_METALLIC_ROUGHNESS:
+        case aiTextureType_UNKNOWN:
+            return { "ReflectionFactor", "ShininessExponent" };
+        default:
+            return {};
+    }
+}
+
+static std::string SanitizeTextureIdentifier(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (char c : value) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        } else if (!out.empty() && out.back() != '_') {
+            out.push_back('_');
+        }
+    }
+    while (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+    if (out.empty()) {
+        out = "texture";
+    }
+    return out;
+}
+
+static std::string GetFileStem(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    const size_t start = (slash == std::string::npos) ? 0 : slash + 1;
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || dot < start) {
+        return path.substr(start);
+    }
+    return path.substr(start, dot - start);
+}
+
+static std::string GetTextureNodeName(const char* prop_name) {
+    if (prop_name == nullptr) {
+        return "texture";
+    }
+    const std::string prop(prop_name);
+    if (prop == "DiffuseColor" || prop == "Maya|TEX_color_map") {
+        return "base_color_texture";
+    }
+    if (prop == "NormalMap" || prop == "Maya|TEX_normal_map") {
+        return "normal_texture";
+    }
+    if (prop == "EmissiveColor") {
+        return "emissive_texture";
+    }
+    if (prop == "Maya|TEX_ao_map" || prop == "AmbientColor") {
+        return "occlusion_texture";
+    }
+    if (prop == "ReflectionFactor") {
+        return "metallic_texture";
+    }
+    if (prop == "ShininessExponent") {
+        return "roughness_texture";
+    }
+    if (prop == "SpecularColor") {
+        return "specular_texture";
+    }
+    if (prop == "TransparentColor" || prop == "TransparencyFactor") {
+        return "opacity_texture";
+    }
+    if (prop == "DisplacementColor") {
+        return "displacement_texture";
+    }
+    if (prop == "Bump") {
+        return "bump_texture";
+    }
+    if (prop == "ReflectionColor") {
+        return "reflection_texture";
+    }
+    return SanitizeTextureIdentifier(prop) + "_texture";
+}
+
+static int GetTextureBindingPriority(aiTextureType type) {
+    switch (type) {
+        case aiTextureType_GLTF_METALLIC_ROUGHNESS:
+            return 500;
+        case aiTextureType_BASE_COLOR:
+        case aiTextureType_NORMAL_CAMERA:
+        case aiTextureType_METALNESS:
+        case aiTextureType_DIFFUSE_ROUGHNESS:
+        case aiTextureType_AMBIENT_OCCLUSION:
+        case aiTextureType_EMISSION_COLOR:
+            return 400;
+        case aiTextureType_UNKNOWN:
+        case aiTextureType_LIGHTMAP:
+            return 350;
+        case aiTextureType_DIFFUSE:
+        case aiTextureType_NORMALS:
+        case aiTextureType_SHININESS:
+        case aiTextureType_EMISSIVE:
+        case aiTextureType_AMBIENT:
+            return 300;
+        default:
+            return 200;
+    }
+}
+
+static std::vector<TextureBinding> CollectTextureBindings(const aiMaterial* mat, size_t materialIndex, bool logWarnings) {
+    std::map<std::string, TextureBinding> bestByProperty;
+    std::vector<std::string> propertyOrder;
+
+    for (size_t tt = aiTextureType_DIFFUSE; tt <= AI_TEXTURE_TYPE_MAX; ++tt) {
+        const aiTextureType textureType = static_cast<aiTextureType>(tt);
+        const std::vector<const char*> propertyNames = GetTexturePropertyNames(textureType);
+        if (propertyNames.empty()) {
+            continue;
+        }
+
+        const size_t textureCount = mat->GetTextureCount(textureType);
+        if (textureCount < 1) {
+            continue;
+        }
+
+        if (textureCount > 1 && logWarnings) {
+            std::stringstream err;
+            err << "Multilayer textures not supported (for now),";
+            err << " skipping texture type " << tt;
+            err << " of material " << materialIndex;
+            ASSIMP_LOG_WARN(err.str());
+        }
+
+        aiString texturePath;
+        if (mat->GetTexture(textureType, 0, &texturePath) != aiReturn_SUCCESS) {
+            std::stringstream err;
+            err << "Failed to get texture 0 for texture of type " << textureType;
+            err << " on material " << materialIndex;
+            err << ", however GetTextureCount returned " << textureCount << ".";
+            throw DeadlyExportError(err.str());
+        }
+
+        aiUVTransform transform;
+        unsigned int max = sizeof(aiUVTransform);
+        aiGetMaterialFloatArray(mat, AI_MATKEY_UVTRANSFORM(textureType, 0), (ai_real *)&transform, &max);
+
+        const int priority = GetTextureBindingPriority(textureType);
+        for (const char* propertyName : propertyNames) {
+            if (propertyName == nullptr) {
+                continue;
+            }
+
+            const std::string key(propertyName);
+            auto it = bestByProperty.find(key);
+            if (it == bestByProperty.end()) {
+                TextureBinding binding;
+                binding.type = textureType;
+                binding.texturePath = texturePath.C_Str();
+                binding.propertyName = key;
+                binding.uvTransform = transform;
+                binding.priority = priority;
+                bestByProperty.emplace(key, binding);
+                propertyOrder.push_back(key);
+                continue;
+            }
+
+            if (priority > it->second.priority) {
+                it->second.type = textureType;
+                it->second.texturePath = texturePath.C_Str();
+                it->second.propertyName = key;
+                it->second.uvTransform = transform;
+                it->second.priority = priority;
+            }
+        }
+    }
+
+    std::vector<TextureBinding> bindings;
+    bindings.reserve(propertyOrder.size());
+    for (const std::string& propertyName : propertyOrder) {
+        bindings.push_back(bestByProperty[propertyName]);
+    }
+    return bindings;
+}
+
+static std::string GetGeometryObjectName(const aiScene* scene, const aiNode* node) {
+    if (scene != nullptr && node != nullptr && node->mNumMeshes > 0) {
+        const aiMesh* mesh = scene->mMeshes[node->mMeshes[0]];
+        if (mesh != nullptr && mesh->mName.length > 0) {
+            return mesh->mName.C_Str();
+        }
+        if (node->mName.length > 0) {
+            return node->mName.C_Str();
+        }
+        return "mesh_" + std::to_string(node->mMeshes[0]);
+    }
+    if (node != nullptr && node->mName.length > 0) {
+        return node->mName.C_Str();
+    }
+    return "Geometry";
+}
+
+static bool TryGetMetallicFactor(const aiMaterial* mat, ai_real& out) {
+    if (mat == nullptr) {
+        return false;
+    }
+    return mat->Get(AI_MATKEY_METALLIC_FACTOR, out) == aiReturn_SUCCESS;
+}
+
+static bool TryGetRoughnessFactor(const aiMaterial* mat, ai_real& out) {
+    if (mat == nullptr) {
+        return false;
+    }
+    return mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, out) == aiReturn_SUCCESS;
+}
+
+static ai_real RoughnessToShininess(ai_real roughness) {
+    const ai_real clamped = std::max<ai_real>(roughness, static_cast<ai_real>(0.001));
+    return static_cast<ai_real>(1.0) / clamped;
 }
 
 void FBXExporter::WriteDefinitions () {
@@ -1097,7 +1342,9 @@ void FBXExporter::WriteObjects () {
     object_node.EndProperties(outstream, binary, indent);
     object_node.BeginChildren(outstream, binary, indent);
 
-    bool bJoinIdenticalVertices = mProperties->GetPropertyBool("bJoinIdenticalVertices", true);
+    bool bJoinIdenticalVertices = mProperties->GetPropertyBool(
+        "assimpjs.fbx.join_position_vertices",
+        mProperties->GetPropertyBool("bJoinIdenticalVertices", true));
     // save vertex_indices as it is needed later
     std::vector<std::vector<int32_t>> vVertexIndice(mScene->mNumMeshes);
     std::vector<uint32_t> uniq_v_before_mi;
@@ -1119,25 +1366,23 @@ void FBXExporter::WriteObjects () {
         FBX::Node n("Geometry");
         int64_t uid = generate_uid();
         mesh_uids[node] = uid;
-        n.AddProperty(uid);
-        n.AddProperty(FBX::SEPARATOR + "Geometry");
-        n.AddProperty("Mesh");
+        n.AddProperties(uid, GetGeometryObjectName(mScene, node) + FBX::SEPARATOR + "Geometry", "Mesh");
         n.Begin(outstream, binary, indent);
         n.DumpProperties(outstream, binary, indent);
         n.EndProperties(outstream, binary, indent);
         n.BeginChildren(outstream, binary, indent);
 
         // output vertex data - each vertex should be unique (probably)
-        std::vector<float> flattened_vertices;
+        std::vector<double> flattened_vertices;
         // index of original vertex in vertex data vector
         std::vector<int32_t> vertex_indices;
 
-        std::vector<float> normal_data;
-        std::vector<float> color_data;
+        std::vector<double> normal_data;
+        std::vector<double> color_data;
 
         std::vector<int32_t> polygon_data;
 
-        std::vector<std::vector<float>> uv_data;
+        std::vector<std::vector<double>> uv_data;
         std::vector<std::vector<int32_t>> uv_indices;
 
         indent = 2;
@@ -1416,6 +1661,13 @@ void FBXExporter::WriteObjects () {
 
         // these are used to receive material data
         ai_real f; aiColor3D c;
+        ai_real metallic_factor = static_cast<ai_real>(0.0);
+        ai_real roughness_factor = static_cast<ai_real>(1.0);
+        const bool has_metallic_factor = TryGetMetallicFactor(m, metallic_factor);
+        const bool has_roughness_factor = TryGetRoughnessFactor(m, roughness_factor);
+        const bool has_rm_texture =
+            m->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0 ||
+            m->GetTextureCount(aiTextureType_UNKNOWN) > 0;
 
         // start the node record
         FBX::Node n("Material");
@@ -1433,7 +1685,7 @@ void FBXExporter::WriteObjects () {
         n.AddChild("Version", int32_t(102));
         f = 0;
         m->Get(AI_MATKEY_SHININESS, f);
-        bool phong = (f > 0);
+        bool phong = (f > 0) || has_metallic_factor || has_roughness_factor || has_rm_texture;
         if (phong) {
             n.AddChild("ShadingModel", "phong");
         } else {
@@ -1465,6 +1717,12 @@ void FBXExporter::WriteObjects () {
         if (m->Get(AI_MATKEY_COLOR_DIFFUSE, c) == aiReturn_SUCCESS) {
             p.AddP70colorA("DiffuseColor", c.r, c.g, c.b);
             //p.AddP70numberA("DiffuseFactor", 1.0);
+        } else {
+            aiColor4D base_color;
+            if (m->Get(AI_MATKEY_BASE_COLOR, base_color) == aiReturn_SUCCESS) {
+                p.AddP70colorA("DiffuseColor", base_color.r, base_color.g, base_color.b);
+                //p.AddP70numberA("DiffuseFactor", 1.0);
+            }
         }
         if (m->Get(AI_MATKEY_COLOR_TRANSPARENT, c) == aiReturn_SUCCESS) {
             // "TransparentColor" / "TransparencyFactor"...
@@ -1491,19 +1749,27 @@ void FBXExporter::WriteObjects () {
         }
         if (m->Get(AI_MATKEY_REFLECTIVITY, f) == aiReturn_SUCCESS) {
             p.AddP70numberA("ReflectionFactor", f);
+        } else if (has_metallic_factor) {
+            p.AddP70numberA("ReflectionFactor", metallic_factor);
         }
         if (phong) {
             if (m->Get(AI_MATKEY_COLOR_SPECULAR, c) == aiReturn_SUCCESS) {
                 p.AddP70colorA("SpecularColor", c.r, c.g, c.b);
+            } else if (has_metallic_factor) {
+                p.AddP70colorA("SpecularColor", metallic_factor, metallic_factor, metallic_factor);
             }
             if (m->Get(AI_MATKEY_SHININESS_STRENGTH, f) == aiReturn_SUCCESS) {
                 p.AddP70numberA("ShininessFactor", f);
             }
             if (m->Get(AI_MATKEY_SHININESS, f) == aiReturn_SUCCESS) {
                 p.AddP70numberA("ShininessExponent", f);
+            } else if (has_roughness_factor) {
+                p.AddP70numberA("ShininessExponent", RoughnessToShininess(roughness_factor));
             }
             if (m->Get(AI_MATKEY_REFLECTIVITY, f) == aiReturn_SUCCESS) {
                 p.AddP70numberA("ReflectionFactor", f);
+            } else if (has_metallic_factor) {
+                p.AddP70numberA("ReflectionFactor", metallic_factor);
             }
         }
 
@@ -1520,7 +1786,14 @@ void FBXExporter::WriteObjects () {
         m->Get(AI_MATKEY_COLOR_AMBIENT, c);
         p.AddP70vector("Ambient", c.r, c.g, c.b);
         c.r = 0.8f; c.g = 0.8f; c.b = 0.8f;
-        m->Get(AI_MATKEY_COLOR_DIFFUSE, c);
+        if (m->Get(AI_MATKEY_COLOR_DIFFUSE, c) != aiReturn_SUCCESS) {
+            aiColor4D base_color;
+            if (m->Get(AI_MATKEY_BASE_COLOR, base_color) == aiReturn_SUCCESS) {
+                c.r = base_color.r;
+                c.g = base_color.g;
+                c.b = base_color.b;
+            }
+        }
         p.AddP70vector("Diffuse", c.r, c.g, c.b);
         // The FBX SDK determines "Opacity" from transparency colour (RGB)
         // and factor (F) as: O = (1.0 - F * ((R + G + B) / 3)).
@@ -1537,19 +1810,27 @@ void FBXExporter::WriteObjects () {
         if (phong) {
             // specular color is multiplied by shininess_strength
             c.r = 0.2f; c.g = 0.2f; c.b = 0.2f;
-            m->Get(AI_MATKEY_COLOR_SPECULAR, c);
+            if (m->Get(AI_MATKEY_COLOR_SPECULAR, c) != aiReturn_SUCCESS && has_metallic_factor) {
+                c.r = metallic_factor;
+                c.g = metallic_factor;
+                c.b = metallic_factor;
+            }
             f = 1.0f;
             m->Get(AI_MATKEY_SHININESS_STRENGTH, f);
             p.AddP70vector("Specular", f*c.r, f*c.g, f*c.b);
             f = 20.0f;
-            m->Get(AI_MATKEY_SHININESS, f);
+            if (m->Get(AI_MATKEY_SHININESS, f) != aiReturn_SUCCESS && has_roughness_factor) {
+                f = RoughnessToShininess(roughness_factor);
+            }
             p.AddP70double("Shininess", f);
             // Legacy "Reflectivity" is F*F*((R+G+B)/3),
             // where F is the proportion of light reflected (AKA reflectivity),
             // and RGB is the reflective colour of the material.
             // No idea why, but we might as well set it the same way.
             f = 0.0f;
-            m->Get(AI_MATKEY_REFLECTIVITY, f);
+            if (m->Get(AI_MATKEY_REFLECTIVITY, f) != aiReturn_SUCCESS && has_metallic_factor) {
+                f = metallic_factor;
+            }
             c.r = 1.0f, c.g = 1.0f, c.b = 1.0f;
             m->Get(AI_MATKEY_COLOR_REFLECTIVE, c);
             p.AddP70double("Reflectivity", f*f*((c.r+c.g+c.b)/3.0));
@@ -1563,23 +1844,14 @@ void FBXExporter::WriteObjects () {
     // we need to look up all the images we're using,
     // so we can generate uids, and eliminate duplicates.
     std::map<std::string, int64_t> uid_by_image;
+    std::map<std::string, std::string> video_name_by_image;
     for (size_t i = 0; i < mScene->mNumMaterials; ++i) {
-        aiString texpath;
         aiMaterial* mat = mScene->mMaterials[i];
-        for (
-            size_t tt = aiTextureType_DIFFUSE;
-            tt < aiTextureType_UNKNOWN;
-            ++tt
-        ){
-            const aiTextureType textype = static_cast<aiTextureType>(tt);
-            const size_t texcount = mat->GetTextureCount(textype);
-            for (size_t j = 0; j < texcount; ++j) {
-                mat->GetTexture(textype, (unsigned int)j, &texpath);
-                const std::string texstring = texpath.C_Str();
-                auto elem = uid_by_image.find(texstring);
-                if (elem == uid_by_image.end()) {
-                    uid_by_image[texstring] = generate_uid();
-                }
+        for (const TextureBinding& binding : CollectTextureBindings(mat, i, false)) {
+            auto elem = uid_by_image.find(binding.texturePath);
+            if (elem == uid_by_image.end()) {
+                uid_by_image[binding.texturePath] = generate_uid();
+                video_name_by_image[binding.texturePath] = SanitizeTextureIdentifier(GetFileStem(binding.texturePath));
             }
         }
     }
@@ -1588,7 +1860,8 @@ void FBXExporter::WriteObjects () {
     for (const auto &it : uid_by_image) {
         FBX::Node n("Video");
         const int64_t& uid = it.second;
-        const std::string name = ""; // TODO: ... name???
+        const std::string name = SanitizeTextureIdentifier(GetFileStem(it.first));
+        video_name_by_image[it.first] = name;
         n.AddProperties(uid, name + FBX::SEPARATOR + "Video", "Clip");
         n.AddChild("Type", "Clip");
         FBX::Node p("Properties70");
@@ -1632,121 +1905,45 @@ void FBXExporter::WriteObjects () {
 
     // Textures
     // referenced by material_index/texture_type pairs.
-    std::map<std::pair<size_t,size_t>,int64_t> texture_uids;
-    const std::map<aiTextureType,std::string> prop_name_by_tt = {
-        {aiTextureType_DIFFUSE,      "DiffuseColor"},
-        {aiTextureType_SPECULAR,     "SpecularColor"},
-        {aiTextureType_AMBIENT,      "AmbientColor"},
-        {aiTextureType_EMISSIVE,     "EmissiveColor"},
-        {aiTextureType_HEIGHT,       "Bump"},
-        {aiTextureType_NORMALS,      "NormalMap"},
-        {aiTextureType_SHININESS,    "ShininessExponent"},
-        {aiTextureType_OPACITY,      "TransparentColor"},
-        {aiTextureType_DISPLACEMENT, "DisplacementColor"},
-        //{aiTextureType_LIGHTMAP, "???"},
-        {aiTextureType_REFLECTION,   "ReflectionColor"}
-        //{aiTextureType_UNKNOWN, ""}
-    };
     for (size_t i = 0; i < mScene->mNumMaterials; ++i) {
         // textures are attached to materials
         aiMaterial* mat = mScene->mMaterials[i];
         int64_t material_uid = material_uids[i];
-
-        for (
-            size_t j = aiTextureType_DIFFUSE;
-            j < aiTextureType_UNKNOWN;
-            ++j
-        ) {
-            const aiTextureType tt = static_cast<aiTextureType>(j);
-            size_t n = mat->GetTextureCount(tt);
-
-            if (n < 1) { // no texture of this type
-                continue;
-            }
-
-            if (n > 1) {
-                // TODO: multilayer textures
-                std::stringstream err;
-                err << "Multilayer textures not supported (for now),";
-                err << " skipping texture type " << j;
-                err << " of material " << i;
-                ASSIMP_LOG_WARN(err.str());
-            }
-
-            // get image path for this (single-image) texture
-            aiString tpath;
-            if (mat->GetTexture(tt, 0, &tpath) != aiReturn_SUCCESS) {
-                std::stringstream err;
-                err << "Failed to get texture 0 for texture of type " << tt;
-                err << " on material " << i;
-                err << ", however GetTextureCount returned 1.";
-                throw DeadlyExportError(err.str());
-            }
-            const std::string texture_path(tpath.C_Str());
-
-            // get connected image uid
-            auto elem = uid_by_image.find(texture_path);
+        for (const TextureBinding& binding : CollectTextureBindings(mat, i, true)) {
+            auto elem = uid_by_image.find(binding.texturePath);
             if (elem == uid_by_image.end()) {
-                // this should never happen
                 std::stringstream err;
                 err << "Failed to find video element for texture with path";
-                err << " \"" << texture_path << "\"";
-                err << ", type " << j << ", material " << i;
+                err << " \"" << binding.texturePath << "\"";
+                err << ", type " << binding.type << ", material " << i;
                 throw DeadlyExportError(err.str());
             }
             const int64_t image_uid = elem->second;
 
-            // get the name of the material property to connect to
-            auto elem2 = prop_name_by_tt.find(tt);
-            if (elem2 == prop_name_by_tt.end()) {
-                // don't know how to handle this type of texture,
-                // so skip it.
-                std::stringstream err;
-                err << "Not sure how to handle texture of type " << j;
-                err << " on material " << i;
-                err << ", skipping...";
-                ASSIMP_LOG_WARN(err.str());
-                continue;
-            }
-            const std::string& prop_name = elem2->second;
-
-            // generate a uid for this texture
             const int64_t texture_uid = generate_uid();
-
-            // link the texture to the material
-            connections.emplace_back(
-                "C", "OP", texture_uid, material_uid, prop_name
-            );
-
-            // link the image data to the texture
+            connections.emplace_back("C", "OP", texture_uid, material_uid, binding.propertyName);
             connections.emplace_back("C", "OO", image_uid, texture_uid);
 
-            aiUVTransform trafo;
-            unsigned int max = sizeof(aiUVTransform);
-            aiGetMaterialFloatArray(mat, AI_MATKEY_UVTRANSFORM(aiTextureType_DIFFUSE, 0), (ai_real *)&trafo, &max);
-
-            // now write the actual texture node
             FBX::Node tnode("Texture");
-            // TODO: some way to determine texture name?
-            const std::string texture_name = "" + FBX::SEPARATOR + "Texture";
+            const std::string texture_label = GetTextureNodeName(binding.propertyName.c_str());
+            const std::string texture_name = texture_label + FBX::SEPARATOR + "Texture";
             tnode.AddProperties(texture_uid, texture_name, "");
-            // there really doesn't seem to be a better type than this:
             tnode.AddChild("Type", "TextureVideoClip");
             tnode.AddChild("Version", int32_t(202));
-            tnode.AddChild("TextureName", texture_name);
+            tnode.AddChild("TextureName", texture_label);
+            auto videoNameIt = video_name_by_image.find(binding.texturePath);
+            if (videoNameIt != video_name_by_image.end()) {
+                tnode.AddChild("Media", videoNameIt->second + FBX::SEPARATOR + "Video");
+            }
             FBX::Node p("Properties70");
-            p.AddP70vectorA("Translation", trafo.mTranslation[0], trafo.mTranslation[1], 0.0);
-            p.AddP70vectorA("Rotation", 0, 0, trafo.mRotation);
-            p.AddP70vectorA("Scaling", trafo.mScaling[0], trafo.mScaling[1], 0.0);
+            p.AddP70vectorA("Translation", binding.uvTransform.mTranslation[0], binding.uvTransform.mTranslation[1], 0.0);
+            p.AddP70vectorA("Rotation", 0, 0, binding.uvTransform.mRotation);
+            p.AddP70vectorA("Scaling", binding.uvTransform.mScaling[0], binding.uvTransform.mScaling[1], 0.0);
             p.AddP70enum("CurrentTextureBlendMode", 0); // TODO: verify
-            //p.AddP70string("UVSet", ""); // TODO: how should this work?
             p.AddP70bool("UseMaterial", true);
             tnode.AddChild(p);
-            // can't easily determine which texture path will be correct,
-            // so just store what we have in every field.
-            // these being incorrect is a common problem with FBX anyway.
-            tnode.AddChild("FileName", texture_path);
-            tnode.AddChild("RelativeFilename", texture_path);
+            tnode.AddChild("FileName", binding.texturePath);
+            tnode.AddChild("RelativeFilename", binding.texturePath);
             tnode.AddChild("ModelUVTranslation", double(0.0), double(0.0));
             tnode.AddChild("ModelUVScaling", double(1.0), double(1.0));
             tnode.AddChild("Texture_Alpha_Source", "None");

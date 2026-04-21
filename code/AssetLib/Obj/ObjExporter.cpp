@@ -256,11 +256,21 @@ void ObjExporter::WriteMaterialFile() {
         if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_OPACITY(0),s)) {
             mOutputMat << "map_d " << s.data << endl;
         }
-        if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_NORMALS(0),s)) {
-            mOutputMat << "map_Kn " << s.data << endl;
+        aiString normalTexture;
+        const bool hasNormalTexture = AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_NORMALS(0), normalTexture);
+        if(hasNormalTexture) {
+            mOutputMat << "map_Kn " << normalTexture.data << endl;
+            mOutputMat << "norm " << normalTexture.data << endl;
         }
-        if(AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_HEIGHT(0),s)) {
-            mOutputMat << "map_Bump -bm 1.000000 " << s.data << endl;
+        aiString heightTexture;
+        const bool hasHeightTexture = AI_SUCCESS == mat->Get(AI_MATKEY_TEXTURE_HEIGHT(0), heightTexture);
+        if(hasHeightTexture) {
+            mOutputMat << "map_Bump -bm 1.000000 " << heightTexture.data << endl;
+            mOutputMat << "bump -bm 1.000000 " << heightTexture.data << endl;
+        } else if(hasNormalTexture) {
+            // Older DCC importers often ignore normal-specific MTL keys but still honor bump aliases.
+            mOutputMat << "map_Bump -bm 1.000000 " << normalTexture.data << endl;
+            mOutputMat << "bump -bm 1.000000 " << normalTexture.data << endl;
         }
         // PBR extensions (OBJ MTL PBR spec)
         if(AI_SUCCESS == mat->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &s)) {

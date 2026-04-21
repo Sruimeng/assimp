@@ -46,6 +46,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assimp/scene.h>
 #include <assimp/Exporter.hpp>
 #include <assimp/Importer.hpp>
+#include <string>
 
 using namespace Assimp;
 
@@ -281,6 +282,76 @@ TEST_F(utObjImportExport, issue1923_vertex_color_Test) {
 
     SceneDiffer differ;
     EXPECT_TRUE(differ.isEqual(scene, sceneReImport));
+#endif // ASSIMP_BUILD_NO_EXPORT
+
+    delete scene;
+}
+
+TEST_F(utObjImportExport, exportObjNormalTextureWritesCompatibilityAliases) {
+    ::Assimp::Importer importer;
+    const aiScene *imported = importer.ReadFileFromMemory((void *)ObjModel, strlen(ObjModel), 0);
+    ASSERT_NE(nullptr, imported);
+
+    aiScene *scene = importer.GetOrphanedScene();
+    ASSERT_NE(nullptr, scene);
+    ASSERT_GE(scene->mNumMaterials, 1U);
+
+    aiString normalTexture("normal.png");
+    scene->mMaterials[0]->AddProperty(&normalTexture, AI_MATKEY_TEXTURE_NORMALS(0));
+
+#ifndef ASSIMP_BUILD_NO_EXPORT
+    ::Assimp::Exporter exporter;
+    const aiExportDataBlob *blob = exporter.ExportToBlob(scene, "obj");
+    ASSERT_NE(nullptr, blob);
+
+    const aiExportDataBlob *mtlBlob = blob->next;
+    while (mtlBlob != nullptr && std::string(mtlBlob->name.C_Str()) != "mtl") {
+        mtlBlob = mtlBlob->next;
+    }
+    ASSERT_NE(nullptr, mtlBlob);
+
+    const std::string mtlText(static_cast<const char *>(mtlBlob->data), mtlBlob->size);
+    EXPECT_NE(std::string::npos, mtlText.find("map_Kn normal.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("norm normal.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("map_Bump -bm 1.000000 normal.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("bump -bm 1.000000 normal.png"));
+#endif // ASSIMP_BUILD_NO_EXPORT
+
+    delete scene;
+}
+
+TEST_F(utObjImportExport, exportObjHeightTextureKeepsBumpSlotDistinct) {
+    ::Assimp::Importer importer;
+    const aiScene *imported = importer.ReadFileFromMemory((void *)ObjModel, strlen(ObjModel), 0);
+    ASSERT_NE(nullptr, imported);
+
+    aiScene *scene = importer.GetOrphanedScene();
+    ASSERT_NE(nullptr, scene);
+    ASSERT_GE(scene->mNumMaterials, 1U);
+
+    aiString normalTexture("normal.png");
+    aiString heightTexture("height.png");
+    scene->mMaterials[0]->AddProperty(&normalTexture, AI_MATKEY_TEXTURE_NORMALS(0));
+    scene->mMaterials[0]->AddProperty(&heightTexture, AI_MATKEY_TEXTURE_HEIGHT(0));
+
+#ifndef ASSIMP_BUILD_NO_EXPORT
+    ::Assimp::Exporter exporter;
+    const aiExportDataBlob *blob = exporter.ExportToBlob(scene, "obj");
+    ASSERT_NE(nullptr, blob);
+
+    const aiExportDataBlob *mtlBlob = blob->next;
+    while (mtlBlob != nullptr && std::string(mtlBlob->name.C_Str()) != "mtl") {
+        mtlBlob = mtlBlob->next;
+    }
+    ASSERT_NE(nullptr, mtlBlob);
+
+    const std::string mtlText(static_cast<const char *>(mtlBlob->data), mtlBlob->size);
+    EXPECT_NE(std::string::npos, mtlText.find("map_Kn normal.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("norm normal.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("map_Bump -bm 1.000000 height.png"));
+    EXPECT_NE(std::string::npos, mtlText.find("bump -bm 1.000000 height.png"));
+    EXPECT_EQ(std::string::npos, mtlText.find("map_Bump -bm 1.000000 normal.png"));
+    EXPECT_EQ(std::string::npos, mtlText.find("bump -bm 1.000000 normal.png"));
 #endif // ASSIMP_BUILD_NO_EXPORT
 
     delete scene;

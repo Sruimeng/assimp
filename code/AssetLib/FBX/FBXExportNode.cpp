@@ -47,13 +47,79 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assimp/Exceptional.h> // DeadlyExportError
 #include <assimp/ai_assert.h>
 #include <assimp/StringUtils.h> // ai_snprintf
+#include "zlib.h"
 
 #include <string>
 #include <ostream>
 #include <sstream> // ostringstream
 #include <memory> // shared_ptr
+#include <vector>
 
 namespace Assimp {
+
+namespace {
+
+template <typename T>
+bool TryCompressArray(const std::vector<T>& values, std::vector<unsigned char>& compressed) {
+    if (values.empty()) {
+        return false;
+    }
+
+    const uLong sourceBytes = static_cast<uLong>(values.size() * sizeof(T));
+    if (sourceBytes < 64) {
+        return false;
+    }
+
+    uLongf compressedBytes = compressBound(sourceBytes);
+    compressed.resize(static_cast<size_t>(compressedBytes));
+    const int result = compress2(
+        compressed.data(),
+        &compressedBytes,
+        reinterpret_cast<const Bytef*>(values.data()),
+        sourceBytes,
+        Z_BEST_COMPRESSION);
+    if (result != Z_OK || compressedBytes >= sourceBytes) {
+        compressed.clear();
+        return false;
+    }
+
+    compressed.resize(static_cast<size_t>(compressedBytes));
+    return true;
+}
+
+template <typename T, typename Writer>
+void WriteBinaryArrayProperty(
+    const std::string& name,
+    const std::vector<T>& values,
+    char typeCode,
+    Assimp::StreamWriterLE& s,
+    Writer&& writer
+) {
+    FBX::Node node(name);
+    node.Begin(s, true, 0);
+    s.PutU1(static_cast<uint8_t>(typeCode));
+    s.PutU4(static_cast<uint32_t>(values.size()));
+
+    std::vector<unsigned char> compressed;
+    if (TryCompressArray(values, compressed)) {
+        s.PutU4(1);
+        s.PutU4(static_cast<uint32_t>(compressed.size()));
+        for (unsigned char byte : compressed) {
+            s.PutU1(byte);
+        }
+    } else {
+        s.PutU4(0);
+        s.PutU4(static_cast<uint32_t>(values.size() * sizeof(T)));
+        for (const T& value : values) {
+            writer(value);
+        }
+    }
+
+    node.EndProperties(s, true, 0, 1);
+    node.End(s, true, 0, false);
+}
+
+} // namespace
 
 // AddP70<type> helpers... there's no usable pattern here,
 // so all are defined as separate functions.
@@ -307,10 +373,10 @@ void FBX::Node::BeginBinary(Assimp::StreamWriterLE &s)
     // remember start pos so we can come back and write the end pos
     this->start_pos = s.Tell();
 
-    // placeholders for end pos and property section info
-    s.PutU8(0); // end pos
-    s.PutU8(0); // number of properties
-    s.PutU8(0); // total property section length
+    // FBX 7.4 uses 32-bit node headers in binary files.
+    s.PutU4(0); // end pos
+    s.PutU4(0); // number of properties
+    s.PutU4(0); // total property section length
 
     // node name
     s.PutU1(uint8_t(name.size())); // length of node name
@@ -335,9 +401,9 @@ void FBX::Node::EndPropertiesBinary(
     size_t pos = s.Tell();
     ai_assert(pos > property_start);
     size_t property_section_size = pos - property_start;
-    s.Seek(start_pos + 8); // 8 bytes of uint64_t of end_pos
-    s.PutU8(num_properties);
-    s.PutU8(property_section_size);
+    s.Seek(start_pos + 4);
+    s.PutU4(static_cast<uint32_t>(num_properties));
+    s.PutU4(static_cast<uint32_t>(property_section_size));
     s.Seek(pos);
 }
 
@@ -358,7 +424,7 @@ void FBX::Node::EndBinary(
     // now go back and write initial pos
     this->end_pos = s.Tell();
     s.Seek(start_pos);
-    s.PutU8(end_pos);
+    s.PutU4(static_cast<uint32_t>(end_pos));
     s.Seek(end_pos);
 }
 
@@ -520,15 +586,9 @@ void FBX::Node::WritePropertyNodeBinary(
     const std::vector<double>& v,
     Assimp::StreamWriterLE& s
 ){
-    FBX::Node node(name);
-    node.BeginBinary(s);
-    s.PutU1('d');
-    s.PutU4(uint32_t(v.size())); // number of elements
-    s.PutU4(0); // no encoding (1 would be zip-compressed)
-    s.PutU4(uint32_t(v.size()) * 8); // data size
-    for (auto it = v.begin(); it != v.end(); ++it) { s.PutF8(*it); }
-    node.EndPropertiesBinary(s, 1);
-    node.EndBinary(s, false);
+    WriteBinaryArrayProperty(name, v, 'd', s, [&](double value) {
+        s.PutF8(value);
+    });
 }
 
 // binary property node from vector of floats
@@ -538,15 +598,9 @@ void FBX::Node::WritePropertyNodeBinary(
     const std::vector<float>& v,
     Assimp::StreamWriterLE& s
 ){
-    FBX::Node node(name);
-    node.BeginBinary(s);
-    s.PutU1('f');
-    s.PutU4(uint32_t(v.size())); // number of elements
-    s.PutU4(0); // no encoding (1 would be zip-compressed)
-    s.PutU4(uint32_t(v.size()) * 4); // data size
-    for (auto it = v.begin(); it != v.end(); ++it) { s.PutF4(*it); }
-    node.EndPropertiesBinary(s, 1);
-    node.EndBinary(s, false);
+    WriteBinaryArrayProperty(name, v, 'f', s, [&](float value) {
+        s.PutF4(value);
+    });
 }
 
 // binary property node from vector of int32_t
@@ -556,15 +610,9 @@ void FBX::Node::WritePropertyNodeBinary(
     const std::vector<int32_t>& v,
     Assimp::StreamWriterLE& s
 ){
-    FBX::Node node(name);
-    node.BeginBinary(s);
-    s.PutU1('i');
-    s.PutU4(uint32_t(v.size())); // number of elements
-    s.PutU4(0); // no encoding (1 would be zip-compressed)
-    s.PutU4(uint32_t(v.size()) * 4); // data size
-    for (auto it = v.begin(); it != v.end(); ++it) { s.PutI4(*it); }
-    node.EndPropertiesBinary(s, 1);
-    node.EndBinary(s, false);
+    WriteBinaryArrayProperty(name, v, 'i', s, [&](int32_t value) {
+        s.PutI4(value);
+    });
 }
 
 // public static member functions
