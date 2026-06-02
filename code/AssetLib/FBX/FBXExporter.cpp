@@ -61,12 +61,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Header files, standard library.
 #include <array>
 #include <ctime> // localtime, tm_*
+#include <cstring>
 #include <map>
 #include <memory> // shared_ptr
 #include <numeric>
 #include <set>
 #include <sstream> // stringstream
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -133,6 +135,56 @@ namespace FBX {
     }
 
 } // end of namespace Assimp
+
+namespace {
+
+struct FbxVec3Key {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+
+    bool operator==(const FbxVec3Key& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct FbxVecHash {
+    size_t operator()(const FbxVec3Key& key) const {
+        size_t hash = static_cast<size_t>(2166136261u);
+        hash ^= static_cast<size_t>(key.x);
+        hash *= static_cast<size_t>(16777619u);
+        hash ^= static_cast<size_t>(key.y);
+        hash *= static_cast<size_t>(16777619u);
+        hash ^= static_cast<size_t>(key.z);
+        hash *= static_cast<size_t>(16777619u);
+        return hash;
+    }
+};
+
+static uint32_t FloatBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static FbxVec3Key MakeFbxVec3Key(const aiVector3D& value) {
+    return { FloatBits(value.x), FloatBits(value.y), FloatBits(value.z) };
+}
+
+static void AppendVec3Data(std::vector<double>& values, const aiVector3D& value) {
+    values.push_back(value.x);
+    values.push_back(value.y);
+    values.push_back(value.z);
+}
+
+static void AppendColorData(std::vector<double>& values, const aiColor4D& value) {
+    values.push_back(value.r);
+    values.push_back(value.g);
+    values.push_back(value.b);
+    values.push_back(value.a);
+}
+
+} // namespace
 
 FBXExporter::FBXExporter ( const aiScene* pScene, const ExportProperties* pProperties )
 : binary(false)
@@ -1372,6 +1424,38 @@ void FBXExporter::WriteObjects () {
         n.EndProperties(outstream, binary, indent);
         n.BeginChildren(outstream, binary, indent);
 
+        size_t totalVertexCount = 0;
+        size_t totalCornerCount = 0;
+        bool hasNormals = false;
+        bool hasVertexColors = false;
+        size_t maxUvChannels = 0;
+        std::vector<size_t> uvCornerCounts;
+        std::vector<size_t> uvValueCounts;
+        for (uint32_t n_mi = 0; n_mi < node->mNumMeshes; ++n_mi) {
+            const auto mi = node->mMeshes[n_mi];
+            const aiMesh *m = mScene->mMeshes[mi];
+            totalVertexCount += m->mNumVertices;
+            size_t meshCornerCount = 0;
+            for (size_t fi = 0; fi < m->mNumFaces; ++fi) {
+                meshCornerCount += m->mFaces[fi].mNumIndices;
+            }
+            totalCornerCount += meshCornerCount;
+            hasNormals = hasNormals || m->HasNormals();
+            hasVertexColors = hasVertexColors || m->HasVertexColors(0);
+
+            const size_t uvChannelCount = static_cast<size_t>(m->GetNumUVChannels());
+            if (uvChannelCount > maxUvChannels) {
+                maxUvChannels = uvChannelCount;
+                uvCornerCounts.resize(maxUvChannels, 0);
+                uvValueCounts.resize(maxUvChannels, 0);
+            }
+            for (size_t uvi = 0; uvi < uvChannelCount; ++uvi) {
+                const size_t componentCount = std::max<size_t>(1, m->mNumUVComponents[uvi]);
+                uvCornerCounts[uvi] += meshCornerCount;
+                uvValueCounts[uvi] += meshCornerCount * componentCount;
+            }
+        }
+
         // output vertex data - each vertex should be unique (probably)
         std::vector<double> flattened_vertices;
         // index of original vertex in vertex data vector
@@ -1385,6 +1469,22 @@ void FBXExporter::WriteObjects () {
         std::vector<std::vector<double>> uv_data;
         std::vector<std::vector<int32_t>> uv_indices;
 
+        flattened_vertices.reserve(totalVertexCount * 3);
+        vertex_indices.reserve(totalVertexCount);
+        polygon_data.reserve(totalCornerCount);
+        if (hasNormals) {
+            normal_data.reserve(totalCornerCount * 3);
+        }
+        if (hasVertexColors) {
+            color_data.reserve(totalCornerCount * 4);
+        }
+        uv_data.resize(maxUvChannels);
+        uv_indices.resize(maxUvChannels);
+        for (size_t uvi = 0; uvi < maxUvChannels; ++uvi) {
+            uv_data[uvi].reserve(uvValueCounts[uvi]);
+            uv_indices[uvi].reserve(uvCornerCounts[uvi]);
+        }
+
         indent = 2;
 
         for (uint32_t n_mi = 0; n_mi < node->mNumMeshes; n_mi++) {
@@ -1395,16 +1495,18 @@ void FBXExporter::WriteObjects () {
           size_t uniq_v_before = flattened_vertices.size() / 3;
 
           // map of vertex value to its index in the data vector
-          std::map<aiVector3D,size_t> index_by_vertex_value;
+          std::unordered_map<FbxVec3Key, size_t, FbxVecHash> index_by_vertex_value;
+          index_by_vertex_value.reserve(m->mNumVertices);
           if (bJoinIdenticalVertices) {
               int32_t index = 0;
               for (size_t vi = 0; vi < m->mNumVertices; ++vi) {
                   aiVector3D vtx = m->mVertices[vi];
-                  auto elem = index_by_vertex_value.find(vtx);
+                  const FbxVec3Key key = MakeFbxVec3Key(vtx);
+                  auto elem = index_by_vertex_value.find(key);
                   if (elem == index_by_vertex_value.end()) {
                       vertex_indices.push_back(index);
-                      index_by_vertex_value[vtx] = index;
-                      flattened_vertices.insert(flattened_vertices.end(), { vtx.x, vtx.y, vtx.z });
+                      index_by_vertex_value.emplace(key, index);
+                      AppendVec3Data(flattened_vertices, vtx);
                       ++index;
                   } else {
                       vertex_indices.push_back(int32_t(elem->second));
@@ -1415,7 +1517,7 @@ void FBXExporter::WriteObjects () {
               std::iota(vertex_indices.begin() + v_offset, vertex_indices.end(), 0);
               for(unsigned int v = 0; v < m->mNumVertices; ++ v) {
                   aiVector3D vtx = m->mVertices[v];
-                  flattened_vertices.insert(flattened_vertices.end(), {vtx.x, vtx.y, vtx.z});
+                  AppendVec3Data(flattened_vertices, vtx);
               }
           }
           vVertexIndice[mi].insert(
@@ -1447,36 +1549,30 @@ void FBXExporter::WriteObjects () {
           uniq_v_before_mi.push_back(static_cast<uint32_t>(uniq_v_before));
 
           if (m->HasNormals()) {
-            normal_data.reserve(3 * polygon_data.size());
             for (size_t fi = 0; fi < m->mNumFaces; fi++) {
               const aiFace & f = m->mFaces[fi];
               for (size_t pvi = 0; pvi < f.mNumIndices; pvi++) {
                 const aiVector3D &curN = m->mNormals[f.mIndices[pvi]];
-                normal_data.insert(normal_data.end(), { curN.x, curN.y, curN.z });
+                AppendVec3Data(normal_data, curN);
               }
             }
           }
 
           const int32_t colorChannelIndex = 0;
           if (m->HasVertexColors(colorChannelIndex)) {
-            color_data.reserve(4 * polygon_data.size());
             for (size_t fi = 0; fi < m->mNumFaces; fi++) {
               const aiFace &f = m->mFaces[fi];
               for (size_t pvi = 0; pvi < f.mNumIndices; pvi++) {
                 const aiColor4D &c = m->mColors[colorChannelIndex][f.mIndices[pvi]];
-                color_data.insert(color_data.end(), { c.r, c.g, c.b, c.a });
+                AppendColorData(color_data, c);
               }
             }
           }
 
-          const auto num_uv = static_cast<size_t>(m->GetNumUVChannels());
-          uv_indices.resize(std::max(num_uv, uv_indices.size()));
-          uv_data.resize(std::max(num_uv, uv_data.size()));
-          std::map<aiVector3D, int32_t> index_by_uv;
-
           // uvs, if any
           for (size_t uvi = 0; uvi < m->GetNumUVChannels(); uvi++) {
             const auto nc = m->mNumUVComponents[uvi];
+            const uint32_t componentCount = std::max<uint32_t>(1, nc);
             if (nc > 2) {
                 // FBX only supports 2-channel UV maps...
                 // or at least i'm not sure how to indicate a different number
@@ -1493,16 +1589,19 @@ void FBXExporter::WriteObjects () {
                 ASSIMP_LOG_WARN(err.str());
             }
 
-            int32_t index = static_cast<int32_t>(uv_data[uvi].size()) / nc;
+            std::unordered_map<FbxVec3Key, int32_t, FbxVecHash> index_by_uv;
+            index_by_uv.reserve(uvCornerCounts[uvi]);
+            int32_t index = static_cast<int32_t>(uv_data[uvi].size() / componentCount);
             for (size_t fi = 0; fi < m->mNumFaces; fi++) {
               const aiFace &f = m->mFaces[fi];
               for (size_t pvi = 0; pvi < f.mNumIndices; pvi++) {
                 const aiVector3D &curUv = m->mTextureCoords[uvi][f.mIndices[pvi]];
-                auto elem = index_by_uv.find(curUv);
+                const FbxVec3Key key = MakeFbxVec3Key(curUv);
+                auto elem = index_by_uv.find(key);
                 if (elem == index_by_uv.end()) {
-                  index_by_uv[curUv] = index;
+                  index_by_uv.emplace(key, index);
                   uv_indices[uvi].push_back(index);
-                  for (uint32_t x = 0; x < nc; ++x) {
+                  for (uint32_t x = 0; x < componentCount; ++x) {
                     uv_data[uvi].push_back(curUv[x]);
                   }
                   ++index;

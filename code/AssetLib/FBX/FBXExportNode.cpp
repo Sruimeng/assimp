@@ -77,7 +77,7 @@ bool TryCompressArray(const std::vector<T>& values, std::vector<unsigned char>& 
         &compressedBytes,
         reinterpret_cast<const Bytef*>(values.data()),
         sourceBytes,
-        Z_BEST_COMPRESSION);
+        Z_BEST_SPEED);
     if (result != Z_OK || compressedBytes >= sourceBytes) {
         compressed.clear();
         return false;
