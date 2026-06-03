@@ -274,7 +274,6 @@ void ObjExporter::WriteMaterialFile() {
         }
         // PBR extensions (OBJ MTL PBR spec)
         if(AI_SUCCESS == mat->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &s)) {
-            mOutputMat << "map_Ns " << s.data << endl;
             mOutputMat << "map_Pr " << s.data << endl;
         }
         if(AI_SUCCESS == mat->GetTexture(aiTextureType_METALNESS, 0, &s)) {
